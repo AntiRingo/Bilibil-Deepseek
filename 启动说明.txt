@@ -1,0 +1,24 @@
+一键启动小鲸
+
+1. 双击“启动项目.bat”。
+2. 工具会刷新 PATH、检查依赖，启动 Web 面板和 ai.py 后台。
+3. 面板就绪后自动在默认浏览器中打开 http://127.0.0.1:5000。
+4. 后台运行后无需保留启动窗口。需要停止时，双击“停止项目.bat”。
+
+注意：启动 ai.py 后会按当前配置运行已开启的评论回复、@回复、主动刷视频等功能。
+同一工具重复启动会复用已有进程。若此前手动启动了项目，请先关闭旧进程。
+若端口 5000 被其他程序占用，工具会提示错误，不会结束其他程序。
+
+日志位置：
+bilibili-ai-bot\data\launcher-logs\bot.log
+bilibili-ai-bot\data\launcher-logs\bot-error.log
+bilibili-ai-bot\data\launcher-logs\web.log
+bilibili-ai-bot\data\launcher-logs\web-error.log
+
+每次新启动相应服务时覆盖其日志；重复启动且复用现有服务时不会覆盖。
+日志可能包含账号信息和面板密码，请勿公开分享。
+
+仅检查环境、不启动服务：
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-project.ps1 -CheckOnly
+
+启动文件必须与 bilibili-ai-bot 文件夹放在同一目录，请勿单独移动。

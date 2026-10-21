@@ -1,0 +1,37 @@
+{
+  "SESSDATA": "你的B站SESSDATA",
+  "BILI_JCT": "你的B站bili_jct",
+  "DEDE_USER_ID": "Bot的B站UID",
+  "OWNER_MID": 0,
+  "REFRESH_TOKEN": "",
+  "ENABLE_PRIVATE_MESSAGES": false,
+  "ENABLE_MENTION_REPLIES": true,
+  "PRIVATE_MESSAGE_AUTO_REPLY": true,
+  "PRIVATE_MESSAGE_AUTO_BLOCK": true,
+  "PRIVATE_MESSAGE_REPLY_SCOPE": "all",
+  "PRIVATE_MESSAGE_REPLY_WHITELIST_UIDS": [],
+  "PRIVATE_MESSAGE_BLOCK_WHITELIST_UIDS": [],
+  "PRIVATE_MESSAGE_TRUSTED_DOMAINS": ["bilibili.com", "b23.tv"],
+  "PRIVATE_MESSAGE_MAX_MESSAGE_AGE": 3600,
+  "PRIVATE_MESSAGE_MAX_PER_POLL": 3,
+
+  "OR_API_KEY": "你的API Key",
+  "OR_BASE_URL": "你的API Base URL",
+
+  "OR_CHAT_MODEL": "对话模型ID",
+  "OR_CHAT_MODEL_FALLBACK": "备用对话模型ID（可留空）",
+  "OR_VISION_MODEL": "视觉模型ID",
+  "OR_SEARCH_MODEL": "搜索模型ID（需支持联网）",
+  "OR_IMAGE_MODEL": "图片生成模型ID",
+
+  "SILICON_API_KEY": "你的Embedding API Key",
+  "EMBED_BASE_URL": "Embedding API Base URL",
+  "EMBED_MODEL": "Embedding模型ID",
+
+  "BOT_NAME": "你的Bot名字",
+  "BOT_AVATAR": "🤖",
+  "BOT_SUBTITLE": "AI 聊天助手",
+  "OWNER_NAME": "你的名字",
+  "OWNER_BILI_NAME": "你的B站昵称",
+  "PROMPT_PRIVATE_MESSAGE": ""
+}
