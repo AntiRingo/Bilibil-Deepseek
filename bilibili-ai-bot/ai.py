@@ -1268,8 +1268,8 @@ def run():
     memory = load_memory()
     video_cache = load_json(VIDEO_MEMORY_FILE, {})
     user_profiles = load_user_profiles()
-    private_client = PrivateMessageClient(BASE_DIR)
-    mention_client = MentionClient(BASE_DIR)
+    private_client = PrivateMessageClient(STATE_DIR or BASE_DIR)
+    mention_client = MentionClient(STATE_DIR or BASE_DIR)
     print(f"📂 已加载 {len(replied_rpids)} 条历史记录 | {len(memory)} 条记忆")
     print(f"📹 已缓存 {len(video_cache)} 个视频 | 👤 {len(user_profiles)} 个用户档案")
 

@@ -1,5 +1,6 @@
 """Offline deployment checks: always use temporary state, never real credentials."""
 import json
+import ast
 import os
 from pathlib import Path
 import subprocess
@@ -11,6 +12,27 @@ APP = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_message_clients_keep_deduplication_state_outside_release(self):
+        # Execute the actual startup assignments without starting the live bot loop.
+        from private_messages import PrivateMessageClient
+        from mentions import MentionClient
+        tree = ast.parse((APP / "ai.py").read_text(encoding="utf-8"))
+        assignments = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id in ("private_client", "mention_client")
+                               for t in n.targets)]
+        self.assertEqual(len(assignments), 2)
+        with tempfile.TemporaryDirectory() as tmp:
+            namespace = dict(STATE_DIR=tmp, BASE_DIR="/read-only-release",
+                             PrivateMessageClient=PrivateMessageClient, MentionClient=MentionClient)
+            exec(compile(ast.Module(body=assignments, type_ignores=[]), str(APP / "ai.py"), "exec"), namespace)
+            private = namespace["private_client"]
+            mention = namespace["mention_client"]
+            self.assertEqual(Path(private.state_file).parent, Path(tmp) / "data")
+            self.assertEqual(mention.path.parent, Path(tmp) / "data")
+            mention.state["seen"] = ["preserved-id"]
+            mention.save()
+            self.assertEqual(MentionClient(tmp).state["seen"], ["preserved-id"])
+
     def run_isolated(self, code, state, production=False, secret="test-secret-" * 4):
         env = os.environ.copy()
         env.update(PYTHONPATH=str(APP), BILI_STATE_DIR=str(state),
