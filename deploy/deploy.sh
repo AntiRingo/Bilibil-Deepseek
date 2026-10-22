@@ -63,7 +63,13 @@ config.update_config({"CHAT_PASSWORD": secrets.token_urlsafe(24),
 PY
 fi
 
-old=$(readlink -f "$base/current" || true)
+old=""
+if [[ -L "$base/current" && -d "$base/current" ]]; then
+    old=$(readlink -f "$base/current")
+elif [[ -e "$base/current" || -L "$base/current" ]]; then
+    echo 'Current release is not a valid directory symlink; refusing to replace it.' >&2
+    exit 1
+fi
 bot_active=0; web_active=0
 systemctl is-active --quiet bilibili-bot && bot_active=1
 systemctl is-active --quiet bilibili-web && web_active=1
