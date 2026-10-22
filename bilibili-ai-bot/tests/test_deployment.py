@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 APP = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(APP))
 
 
 class DeploymentTests(unittest.TestCase):
