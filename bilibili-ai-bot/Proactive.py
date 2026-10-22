@@ -46,7 +46,7 @@ or_client = OpenAI(
 )
 
 # ========== 工具函数 ==========
-COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+COOKIES_FILE = os.path.join(STATE_DIR or os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
 def generate_cookies_file():
     """每次启动自动从config.py生成yt-dlp用的cookies.txt"""

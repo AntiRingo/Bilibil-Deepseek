@@ -10,7 +10,14 @@ import re
 import hashlib
 from datetime import datetime
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# Server releases share one state directory outside the Git checkout.
+# Without this variable, existing local launchers keep their original behavior.
+STATE_DIR = os.environ.get("BILI_STATE_DIR", "")
+if STATE_DIR:
+    STATE_DIR = os.path.abspath(STATE_DIR)
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.chdir(STATE_DIR)
+CONFIG_FILE = os.path.join(STATE_DIR or os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 # ========== 默认配置（首次运行自动生成 config.json） ==========
 _DEFAULTS = {
@@ -139,8 +146,15 @@ def _load_config():
 
 def _save_config(cfg):
     """保存配置到 config.json"""
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    import tempfile
+    fd, temporary = tempfile.mkstemp(prefix=".config-", dir=os.path.dirname(CONFIG_FILE))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        os.replace(temporary, CONFIG_FILE)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 def _ensure_config_file():
     """确保 config.json 存在，不存在则从旧硬编码配置迁移或创建默认"""

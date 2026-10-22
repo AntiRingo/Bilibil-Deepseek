@@ -29,10 +29,14 @@ PERSONALITY_FILE = "data/personality_evolution.json"
 PERSONA_FILE = "data/personas.json"
 MOOD_FILE = "data/mood.json"
 BLOCK_LOG_FILE = "data/block_log.json"
-IMAGE_DIR = "data/images"
+IMAGE_DIR = os.path.abspath("data/images")
 
-or_client = OpenAI(api_key=OR_API_KEY, base_url=OR_BASE_URL)
-embed_client = OpenAI(api_key=SILICON_API_KEY, base_url=_get_raw().get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
+# The panel must be usable before API credentials have been configured.
+def make_optional_client(api_key, base_url):
+    return OpenAI(api_key=api_key, base_url=base_url or None) if api_key else None
+
+or_client = make_optional_client(OR_API_KEY, OR_BASE_URL)
+embed_client = make_optional_client(SILICON_API_KEY, _get_raw().get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
 
 def get_or_client(model_type="chat"):
     """获取指定模型类型的 OpenAI 客户端，支持独立 URL/Key"""
@@ -86,8 +90,14 @@ def web_search(query):
                 pass
         return ""
 
-app = Flask(__name__, template_folder=".", static_folder=".", static_url_path="")
+app = Flask(__name__, template_folder=os.path.dirname(os.path.abspath(__file__)), static_folder=None)
 app.secret_key = SECRET_KEY
+from datetime import timedelta
+app.permanent_session_lifetime = timedelta(days=30)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE") == "1")
+os.makedirs("data", exist_ok=True)
+os.makedirs(IMAGE_DIR, exist_ok=True)
 bili_qr_login = BiliQrLoginManager()
 
 # ========== 登录验证 ==========
@@ -96,10 +106,8 @@ def check_auth():
     # 放行：首页、静态资源、登录接口
     if request.path == "/" or request.path == "/api/login" or request.path == "/api/auth_check" or request.path == "/api/health" or request.path == "/api/branding":
         return
-    if request.path.startswith("/data/images/"):
-        return
-    # 非html/css/js等静态资源也放行
-    if not request.path.startswith("/api/"):
+    # Unknown paths remain 404; images and all other registered routes require login.
+    if request.endpoint is None:
         return
     # API 需要验证
     if not session.get("authed"):
@@ -129,7 +137,8 @@ def change_password():
     new_pwd = data.get("new", "")
     if old_pwd != AUTH_PASSWORD:
         return jsonify({"error": "原密码错误"}), 403
-    if not new_pwd or len(new_pwd) < 3:
+    minimum = 12 if os.environ.get("BILI_PRODUCTION") == "1" else 3
+    if not new_pwd or len(new_pwd) < minimum:
         return jsonify({"error": "新密码太短"}), 400
     AUTH_PASSWORD = new_pwd
     from config import update_config
@@ -208,6 +217,8 @@ def log_cost(source, input_tokens, output_tokens, model=""):
     save_json(COST_LOG_FILE, logs)
 
 def get_embedding(text):
+    if embed_client is None:
+        return []
     from config import get_raw_config
     _ecfg = get_raw_config()
     resp = embed_client.embeddings.create(model=_ecfg.get("EMBED_MODEL", "BAAI/bge-m3"), input=text)
@@ -997,6 +1008,8 @@ def api_update_config():
 
     # 允许空字符串（清空独立URL/Key = 回退到全局），只过滤None
     updates = {k: v for k, v in data.items() if v is not None}
+    if "CHAT_PASSWORD" in updates:
+        return jsonify({"ok": False, "msg": "请使用修改密码接口"}), 400
     if not updates:
         return jsonify({"ok": False, "msg": "没有可更新的字段"}), 400
 
@@ -1004,8 +1017,8 @@ def api_update_config():
 
     # 热更新全局 OpenAI 客户端
     try:
-        or_client = OpenAI(api_key=cfg["OR_API_KEY"], base_url=cfg["OR_BASE_URL"])
-        embed_client = OpenAI(api_key=cfg["SILICON_API_KEY"], base_url=cfg.get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
+        or_client = make_optional_client(cfg["OR_API_KEY"], cfg["OR_BASE_URL"])
+        embed_client = make_optional_client(cfg["SILICON_API_KEY"], cfg.get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
     except Exception as e:
         print(f"⚠️ 客户端重建失败：{e}")
 
@@ -1541,5 +1554,4 @@ if __name__ == "__main__":
     print(f"🍪 B站Cookie: {info}")
 
     print("🌙 本地聊天已启动 → http://localhost:5000")
-    print(f"🔑 访问密码：{AUTH_PASSWORD}")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host=os.environ.get("CHAT_HOST", "127.0.0.1"), port=5000, debug=False)

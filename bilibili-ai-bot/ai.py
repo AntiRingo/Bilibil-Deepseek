@@ -124,8 +124,8 @@ or_client = OpenAI(
 
 embed_client = OpenAI(
     api_key=SILICON_API_KEY,
-    base_url="https://api.siliconflow.cn/v1"
-)
+    base_url=get_raw_config().get("EMBED_BASE_URL") or "https://api.siliconflow.cn/v1"
+) if SILICON_API_KEY else None
 
 def _get_bot_info():
     """从config读取bot和主人信息"""
@@ -501,6 +501,8 @@ def get_festival_prompt():
 
 # ========== 向量记忆系统 ==========
 def get_embedding(text):
+    if embed_client is None:
+        return []
     resp = embed_client.embeddings.create(model="BAAI/bge-m3", input=text)
     return resp.data[0].embedding
 
