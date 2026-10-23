@@ -18,6 +18,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ========== 配置 ==========
 from config import *
 from mentions import MentionClient, inspect_video
+from moderation import Moderation
 from model_options import short_response_options
 from private_messages import (
     PrivateMessageClient,
@@ -915,7 +916,8 @@ def get_new_replies():
             "type":      r["business_id"],
             "content":   r["source_content"],
             "username":  item["user"]["nickname"],
-            "mid":       item["user"]["mid"]
+            "mid":       item["user"]["mid"],
+            "timestamp": item.get("reply_time", 0)
         })
     return replies
 
@@ -1142,41 +1144,13 @@ def process_private_messages(client, affection, memory):
         mid = str(message["sender_uid"])
         username = message["username"]
         content = message["content"]
-        decision = assess_private_message(
-            content,
-            config.get("PRIVATE_MESSAGE_TRUSTED_DOMAINS") or None,
-        )
-
-        if decision.should_block:
-            if is_protected_sender(mid, config):
-                print(f"🛡️ 私信命中安全规则但用户受保护，未拉黑：{username}（{mid}）")
-                log_security_event(
-                    "private_message_protected",
-                    mid,
-                    username,
-                    content,
-                    decision.reason,
-                )
-                continue
-
-            blocked = False
-            if config.get("PRIVATE_MESSAGE_AUTO_BLOCK", True):
-                blocked = block_user(mid, config)
-            action = "已拉黑" if blocked else "已隔离，未完成拉黑"
-            print(f"🚫 私信安全拦截 {username}（{mid}）：{decision.reason}；{action}")
-            _record_private_block(
-                message,
-                decision.reason,
-                affection.get(mid, 0),
-                blocked,
-            )
-            log_security_event(
-                "private_message_auto_block" if blocked else "private_message_quarantined",
-                mid,
-                username,
-                content,
-                f"{decision.reason}；{action}",
-            )
+        moderation = Moderation(load_json, save_json, block_user)
+        if moderation.handle(
+            mid, username, content, "private_message", message.get("timestamp"),
+            "private:" + str(message["msg_key"]), config,
+            lambda text: client.send_text(config, mid, text, message["session_type"]),
+        ):
+            moderation.notify_owner(config, client.send_text)
             continue
 
         if (
@@ -1375,7 +1349,28 @@ def run():
             replies = mentions + [r for r in normal_replies if r["rpid"] not in mention_ids]
             count = 0
 
-            for reply in replies:
+            # Screen the full fetched batch before the normal reply budget is applied.
+            moderation = Moderation(load_json, save_json, block_user)
+            screened = []
+            for candidate in sorted(replies, key=lambda r: r.get("timestamp", 0)):
+                if candidate["rpid"] in replied_rpids:
+                    continue
+                if moderation.handle(
+                    candidate["mid"], candidate["username"], candidate["content"],
+                    "mention" if candidate.get("is_mention") else "comment",
+                    candidate.get("timestamp"), "comment:" + str(candidate["rpid"]),
+                    mention_config,
+                    lambda text, r=candidate: send_reply(
+                        r["oid"], r["rpid"], r["type"], text, root_id=r["thread_id"]),
+                ):
+                    replied_rpids.add(candidate["rpid"])
+                    save_replied(replied_rpids)
+                    if candidate.get("is_mention"):
+                        mention_client.claim(candidate["rpid"])
+                else:
+                    screened.append(candidate)
+            moderation.notify_owner(mention_config, private_client.send_text)
+            for reply in screened:
                 rpid = reply["rpid"]
                 mid = str(reply["mid"])
                 thread_id = str(reply["thread_id"])
@@ -1473,42 +1468,6 @@ def run():
                 if score_delta <= -3:
                     log_security_event("negative_interaction", mid, reply["username"], reply["content"],
                         f"好感度 {current_score}→{new_score}({delta_str})，回复：{ai_reply[:50]}")
-
-                should_block = False
-                if new_score <= -30:
-                    should_block = True
-                    print(f"🔥 好感度过低（{new_score}），触发拉黑！")
-
-                if score_delta <= -3:
-                    block_count = load_json("data/block_count.json", {})
-                    block_count[mid] = block_count.get(mid, 0) + 1
-                    save_json("data/block_count.json", block_count)
-                    if block_count[mid] >= 5:
-                        should_block = True
-                        print(f"🔥 连续辱骂{block_count[mid]}次，触发拉黑！")
-                else:
-                    block_count = load_json("data/block_count.json", {})
-                    if mid in block_count:
-                        block_count[mid] = 0
-                        save_json("data/block_count.json", block_count)
-
-                if should_block and str(mid) != str(OWNER_MID):
-                    block_log = load_json("data/block_log.json", {})
-                    reason = f"好感度过低（{new_score}）" if new_score <= -30 else f"连续辱骂{block_count.get(mid, 0)}次"
-                    block_log[mid] = {
-                        "username": reply["username"], "reason": reason,
-                        "last_comment": reply["content"], "score": new_score,
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M")
-                    }
-                    save_json("data/block_log.json", block_log)
-                    log_security_event("user_blocked", mid, reply["username"], reply["content"],
-                        f"原因：{reason}，好感度：{new_score}")
-                    send_reply(reply["oid"], rpid, reply["type"], "我不想和你说话了。", root_id=reply["thread_id"])
-                    block_user(int(mid))
-                    print(f"🚫 已拉黑用户 {reply['username']}（{mid}）| 原因：{reason}")
-                    replied_rpids.add(rpid)
-                    save_replied(replied_rpids)
-                    continue
 
                 success = send_reply(reply["oid"], rpid, reply["type"], ai_reply, root_id=reply["thread_id"], source_comment=reply["content"])
 

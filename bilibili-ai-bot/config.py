@@ -73,6 +73,13 @@ _DEFAULTS = {
     "PRIVATE_MESSAGE_AUTO_REPLY": True,
     "PRIVATE_MESSAGE_AUTO_BLOCK": True,
 
+    # ===== 主动防护（私信、评论、@ 共用）=====
+    "ENABLE_AUTO_BLOCK": True,
+    "MODERATION_SPAM_WINDOW": 30,
+    "MODERATION_SPAM_THRESHOLD": 6,
+    "MODERATION_REPEAT_THRESHOLD": 3,
+    "MODERATION_WARNING_TTL": 86400,
+
     # ===== 私信参数 =====
     "PRIVATE_MESSAGE_REPLY_SCOPE": "all",  # all / owner / whitelist
     "PRIVATE_MESSAGE_REPLY_WHITELIST_UIDS": [],
