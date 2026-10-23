@@ -60,9 +60,16 @@ with patch("requests.sessions.Session.request", side_effect=AssertionError("Netw
     for path in ["/config.json", "/config.py", "/data/memory.json", "/.git/config", "/cookies.txt"]:
         assert client.get(path).status_code == 404, path
     assert client.get("/api/config/raw").status_code == 401
+    assert client.get("/api/comment_memes").status_code == 401
+    assert client.post("/api/comment_memes").status_code == 401
+    assert client.delete("/api/comment_memes/" + "a" * 32).status_code == 401
+    assert client.get("/api/comment_memes/" + "a" * 32).status_code == 401
     assert client.get("/data/images/private.png").status_code == 401
     assert client.post("/api/login", json={"password": "wrong"}).status_code == 403
     assert client.post("/api/login", json={"password": "test-password-long-enough"}).json["ok"]
+    assert client.get("/api/features").json["ENABLE_COMMENT_MEMES"] is False
+    assert client.post("/api/features/update", json={"ENABLE_COMMENT_MEMES": True}).json["ok"]
+    assert client.get("/api/features").json["ENABLE_COMMENT_MEMES"] is True
     assert client.get("/data/images/private.png").data == b"private image"
     assert client.get("/data/images/../config.json").status_code == 404
     assert client.post("/api/config/update", json={"BOT_NAME": "test"}).json["ok"]

@@ -62,6 +62,7 @@ _DEFAULTS = {
     "EMBED_MODEL": "",
 
     # ===== 功能开关 =====
+    "ENABLE_COMMENT_MEMES": False,
     "ENABLE_WEB_SEARCH": True,
     "ENABLE_PROACTIVE": True,
     "ENABLE_DYNAMIC": True,

@@ -91,6 +91,8 @@ def web_search(query):
         return ""
 
 app = Flask(__name__, template_folder=os.path.dirname(os.path.abspath(__file__)), static_folder=None)
+from comment_memes import register_meme_routes
+register_meme_routes(app)
 app.secret_key = SECRET_KEY
 from datetime import timedelta
 app.permanent_session_lifetime = timedelta(days=30)
@@ -1214,6 +1216,7 @@ def api_get_features():
     from config import get_raw_config
     cfg = get_raw_config()
     features = {
+        "ENABLE_COMMENT_MEMES": cfg.get("ENABLE_COMMENT_MEMES", False),
         "ENABLE_MENTION_REPLIES": cfg.get("ENABLE_MENTION_REPLIES", True),
         "ENABLE_WEB_SEARCH": cfg.get("ENABLE_WEB_SEARCH", True),
         "ENABLE_PROACTIVE": cfg.get("ENABLE_PROACTIVE", True),
@@ -1239,6 +1242,7 @@ def api_update_features():
     data = request.json
     # 只允许更新已知的开关字段
     allowed = {
+        "ENABLE_COMMENT_MEMES",
         "ENABLE_MENTION_REPLIES",
         "ENABLE_WEB_SEARCH", "ENABLE_PROACTIVE", "ENABLE_DYNAMIC",
         "ENABLE_PERSONALITY_EVOLUTION", "ENABLE_MOOD", "ENABLE_AFFECTION",

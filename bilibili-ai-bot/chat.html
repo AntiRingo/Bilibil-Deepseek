@@ -1663,6 +1663,21 @@ body::before {
 
     <button class="settings-btn primary" onclick="saveAllModels()" style="margin-top:4px;width:100%;padding:12px;">💾 保存全部模型配置</button>
 
+    <div class="settings-card">
+      <div class="settings-card-header"><span class="settings-card-title">🖼️ 评论表情包库</span></div>
+      <div class="settings-card-body">
+        <p>开启“评论智能配表情包”后，根据对方评论和回复语气选择一张配图。无合适图片时只发文字。</p>
+        <p>上传静态 PNG/JPEG/WebP/GIF（每张最多 5 MB，共 200 张）。用途说明用于 AI 选择，例如“开心大笑，用于轻松玩笑；不用于安慰”。上传只保存在本地，实际评论时才上传到 B站。</p>
+        <div class="settings-field"><label>图片</label><input id="memeFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div>
+        <div class="settings-field"><label>名称</label><input id="memeName" maxlength="80" placeholder="例如：鲸鱼抱抱"></div>
+        <div class="settings-field"><label>用途说明</label><textarea id="memeDescription" maxlength="500" placeholder="例如：温柔安慰、鼓励、表达关心"></textarea></div>
+        <button class="settings-btn primary" id="memeUploadButton" onclick="uploadCommentMeme()">上传表情包</button>
+        <button class="settings-btn" onclick="loadCommentMemes()">刷新列表</button>
+        <p id="memeStatus" role="status"></p>
+        <div id="memeList" style="display:flex;flex-wrap:wrap;gap:16px"></div>
+      </div>
+    </div>
+
     <!-- 功能开关 -->
     <div class="settings-card">
       <div class="settings-card-header">
@@ -3286,6 +3301,7 @@ const FEATURE_LABELS = {
   ENABLE_WEB_SEARCH: '联网搜索',
   ENABLE_PROACTIVE: '主动刷B站',
   ENABLE_MENTION_REPLIES: '评论区 @我后看视频回复',
+  ENABLE_COMMENT_MEMES: '评论智能配表情包',
   ENABLE_DYNAMIC: '发动态',
   ENABLE_PERSONALITY_EVOLUTION: '性格演化',
   ENABLE_MOOD: '每日心情',
@@ -3614,7 +3630,59 @@ loadSettings = async function() {
   loadMood();
   loadPrompts();
   loadBrandingSettings();
+  loadCommentMemes();
 };
+
+
+async function memeRequest(url, options) {
+  const response = await fetch(url, options);
+  let data;
+  try { data = await response.json(); } catch (_) { throw new Error('请求失败，请检查图片大小或登录状态'); }
+  if (!response.ok) throw new Error(data.error || '请求失败');
+  return data;
+}
+async function loadCommentMemes() {
+  const status = document.getElementById('memeStatus');
+  try {
+    const data = await memeRequest('/api/comment_memes');
+    const list = document.getElementById('memeList');
+    list.replaceChildren();
+    for (const item of data.items) {
+      const card = document.createElement('div'); card.style.cssText = 'width:180px;max-width:100%';
+      const img = document.createElement('img'); img.src = '/api/comment_memes/' + item.id;
+      img.alt = item.name; img.loading = 'lazy'; img.style.cssText = 'width:100%;height:140px;object-fit:contain';
+      const name = document.createElement('strong'); name.textContent = item.name;
+      const description = document.createElement('p'); description.textContent = item.description;
+      description.style.overflowWrap = 'anywhere';
+      const button = document.createElement('button'); button.className = 'settings-btn small'; button.textContent = '删除';
+      button.onclick = async () => {
+        if (!confirm('删除表情包“' + item.name + '”？')) return;
+        button.disabled = true;
+        try { await memeRequest('/api/comment_memes/' + item.id, {method:'DELETE'}); await loadCommentMemes(); }
+        catch (e) { status.textContent = e.message; button.disabled = false; }
+      };
+      card.append(img, name, description, button); list.append(card);
+    }
+    status.textContent = data.items.length ? '已上传 ' + data.items.length + ' 张表情包' : '表情包库为空，上传后即可使用。';
+  } catch(e) { status.textContent = e.message; }
+}
+async function uploadCommentMeme() {
+  const status = document.getElementById('memeStatus');
+  const file = document.getElementById('memeFile').files[0];
+  const name = document.getElementById('memeName').value.trim();
+  const description = document.getElementById('memeDescription').value.trim();
+  if (!file || !name || !description) { status.textContent = '请选择图片并填写名称和用途说明'; return; }
+  if (file.size > 5 * 1024 * 1024) { status.textContent = '图片不能超过 5 MB'; return; }
+  const button = document.getElementById('memeUploadButton'); button.disabled = true;
+  try {
+    const form = new FormData(); form.append('image', file); form.append('name', name); form.append('description', description);
+    await memeRequest('/api/comment_memes', {method:'POST', body:form});
+    document.getElementById('memeFile').value = '';
+    document.getElementById('memeName').value = ''; document.getElementById('memeDescription').value = '';
+    await loadCommentMemes();
+  } catch(e) { status.textContent = e.message; }
+  finally { button.disabled = false; }
+}
 
 // ===== 后端健康检测 =====
 let backendOnline = null;

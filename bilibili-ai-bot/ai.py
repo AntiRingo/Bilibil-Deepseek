@@ -1054,13 +1054,18 @@ impression简短描述用户性格/说话风格，如"友善健谈，喜欢聊�
         result.get("user_facts", [])
     )
 
-def send_reply(oid, rpid, content_type, reply_text, root_id=None):
+def send_reply(oid, rpid, content_type, reply_text, root_id=None, source_comment=None):
     url = "https://api.bilibili.com/x/v2/reply/add"
     data = {
         "oid": oid, "type": content_type,
         "root": root_id or rpid, "parent": rpid,
         "message": reply_text, "csrf": BILI_JCT
     }
+    if source_comment is not None:
+        from comment_memes import prepare_comment_pictures
+        pictures = prepare_comment_pictures(source_comment, reply_text, headers, BILI_JCT)
+        if pictures:
+            data["pictures"] = json.dumps(pictures)
     resp = requests.post(url, headers=headers, data=data, timeout=20)
     result = resp.json()
     code = result["code"]
@@ -1505,7 +1510,7 @@ def run():
                     save_replied(replied_rpids)
                     continue
 
-                success = send_reply(reply["oid"], rpid, reply["type"], ai_reply, root_id=reply["thread_id"])
+                success = send_reply(reply["oid"], rpid, reply["type"], ai_reply, root_id=reply["thread_id"], source_comment=reply["content"])
 
                 if success:
                     save_memory_record(memory, rpid, thread_id, mid, reply["username"], reply["content"], ai_reply)

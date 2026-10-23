@@ -623,6 +623,10 @@ def send_comment(oid, comment_text, oid_type=1):
         "message": comment_text,
         "csrf": BILI_JCT
     }
+    from comment_memes import prepare_comment_pictures
+    pictures = prepare_comment_pictures("", comment_text, headers, BILI_JCT)
+    if pictures:
+        data["pictures"] = json.dumps(pictures)
     try:
         resp = requests.post(url, headers=headers, data=data, timeout=15)
         result = resp.json()
