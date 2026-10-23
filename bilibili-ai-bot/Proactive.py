@@ -8,6 +8,7 @@ import base64
 import re
 from datetime import datetime, timedelta
 from openai import OpenAI
+from video_preferences import order_videos
 
 # ========== 配置 ==========
 from config import *
@@ -707,6 +708,7 @@ def run():
         if video and video["bvid"] not in watched_bvids:
             pubdate = safe_pubdate(video.get("pubdate", 0))
             if pubdate and pubdate >= min_pubdate and datetime.fromtimestamp(pubdate) >= three_months_ago:
+                video['_special'] = True
                 target_videos.insert(0, video)
                 print(f"  ⭐ 特别关心：{video['up_name']} - {video['title']}")
             elif pubdate and pubdate < min_pubdate:
@@ -725,6 +727,8 @@ def run():
                 continue  # 跳过2025年前的视频
             is_today = pubdate and datetime.fromtimestamp(pubdate).date() == today
             if is_today:
+                video['_special'] = any(
+                    v['bvid'] == video['bvid'] and v.get('_special') for v in target_videos)
                 target_videos.insert(0, video)
                 video["_today"] = True
                 print(f"  🔔 今日更新：{video['up_name']} - {video['title']}")
@@ -733,17 +737,23 @@ def run():
 
     # 3. 喜好分区热门视频
     print("🔥 获取分区热门视频...")
-    random.shuffle(PREFERRED_TIDS)
-    for tid in PREFERRED_TIDS:
-        if len(target_videos) >= DAILY_WATCH_COUNT + 5:
-            break
+    # 科技 + 三个随机分区，每个分区限量，避免首个热榜占满候选池。
+    other_tids = [tid for tid in PREFERRED_TIDS if tid != 36]
+    selected_tids = [36] + random.sample(other_tids, min(3, len(other_tids)))
+    per_tid_limit = max(3, (DAILY_WATCH_COUNT + 8) // 4)
+    for tid in selected_tids:
         hot_videos = get_hot_videos_by_tid(tid)
+        added = 0
         for v in hot_videos:
-            if v["bvid"] not in watched_bvids:
+            if v["bvid"] and v["bvid"] not in watched_bvids and not any(
+                    existing['bvid'] == v['bvid'] for existing in target_videos):
                 pubdate = safe_pubdate(v.get("pubdate", 0))
                 if pubdate and pubdate < min_pubdate:
                     continue  # 跳过2025年前的视频
                 target_videos.append(v)
+                added += 1
+                if added >= per_tid_limit:
+                    break
 
     # 去重
     seen = set()
@@ -753,12 +763,8 @@ def run():
             seen.add(v["bvid"])
             unique_videos.append(v)
 
-    # 随机打乱
-    special_count = len(special_mids)
-    if len(unique_videos) > special_count:
-        tail = unique_videos[special_count:]
-        random.shuffle(tail)
-        unique_videos = unique_videos[:special_count] + tail
+    # 小幅偏好 AI / DeepSeek，同时保留其他题材的随机浏览机会。
+    unique_videos = order_videos(unique_videos)
 
     print(f"📋 共找到 {len(unique_videos)} 个视频")
 
