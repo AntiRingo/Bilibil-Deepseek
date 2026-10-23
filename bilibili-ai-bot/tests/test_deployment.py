@@ -62,6 +62,8 @@ with patch("requests.sessions.Session.request", side_effect=AssertionError("Netw
     assert client.get("/api/config/raw").status_code == 401
     assert client.get("/api/comment_memes").status_code == 401
     assert client.post("/api/comment_memes").status_code == 401
+    assert client.patch("/api/comment_memes/" + "a" * 32, json={}).status_code == 401
+    assert client.post("/api/comment_memes/" + "a" * 32 + "/analyze").status_code == 401
     assert client.delete("/api/comment_memes/" + "a" * 32).status_code == 401
     assert client.get("/api/comment_memes/" + "a" * 32).status_code == 401
     assert client.get("/data/images/private.png").status_code == 401

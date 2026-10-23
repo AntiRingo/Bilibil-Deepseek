@@ -28,13 +28,24 @@ class MemeTests(unittest.TestCase):
         from flask import Flask
         app = Flask(__name__)
         memes.register_meme_routes(app)
-        with patch.object(memes, 'library_dir', return_value=self.folder):
+        with patch.object(memes, 'library_dir', return_value=self.folder), patch.object(memes, 'describe_image', return_value='画面：抱抱；情绪：温柔；用途：安慰'):
             client = app.test_client()
             data = dict(image=(io.BytesIO(self.raw), '../../bad.svg'), name='抱抱', description='安慰')
             response = client.post('/api/comment_memes', data=data)
             self.assertEqual(response.status_code, 200)
             key = response.json['item']['id']
+            self.assertEqual(response.json['item']['analysis_status'], 'ready')
+            self.assertIn('温柔', response.json['item']['auto_description'])
+            self.assertEqual(response.json['item']['description'], '安慰')
             self.assertEqual(len(client.get('/api/comment_memes').json['items']), 1)
+            edited = client.patch('/api/comment_memes/' + key, json={'description':'只用于鼓励', 'name':'鼓励'})
+            self.assertEqual(edited.json['item']['description'], '只用于鼓励')
+            result = client.post('/api/comment_memes/' + key + '/analyze')
+            self.assertEqual(result.json['item']['description'], '只用于鼓励')
+            self.assertEqual(client.patch('/api/comment_memes/' + key, json={'description':None}).status_code, 400)
+            self.assertEqual(client.patch('/api/comment_memes/' + 'f'*32, json={}).status_code, 404)
+            cleared = client.patch('/api/comment_memes/' + key, json={'description':''}).json['item']
+            self.assertEqual(memes.selection_items([cleared])[0]['description'], cleared['auto_description'])
             with client.get('/api/comment_memes/' + key) as preview:
                 self.assertEqual(preview.mimetype, 'image/png')
             self.assertEqual(client.get('/api/comment_memes/bad').status_code, 404)
@@ -43,8 +54,7 @@ class MemeTests(unittest.TestCase):
             self.assertEqual(memes.list_memes(self.folder), [])
         with self.assertRaises(ValueError):
             memes.add_meme(self.folder, b'x' * (memes.MAX_BYTES + 1), 'x', 'y')
-        with self.assertRaises(ValueError):
-            memes.add_meme(self.folder, self.raw, 'x', '')
+        self.assertEqual(memes.add_meme(self.folder, self.raw, 'x', '')['description'], '')
 
     def test_selection_only_accepts_library_ids(self):
         item = memes.add_meme(self.folder, self.raw, '抱抱', '温柔安慰')
@@ -92,3 +102,35 @@ class MemeTests(unittest.TestCase):
                     self.assertTrue(ns[name](200, 'hello'))
                 self.assertEqual(json.loads(http.post.call_args.kwargs['data']['pictures']), pictures)
                 http.post.assert_called_once()
+
+    def test_failed_recognition_preserves_image_and_manual_usage(self):
+        item = memes.add_meme(self.folder, self.raw, 'x', '')
+        with patch.object(memes, 'describe_image', side_effect=TimeoutError()):
+            item = memes.analyze_meme(self.folder, item)
+        self.assertEqual(item['analysis_status'], 'failed')
+        self.assertTrue((self.folder / (item['id'] + '.png')).exists())
+        self.assertEqual(memes.selection_items([item]), [])
+        item['description'] = '只用于鼓励'
+        item['auto_description'] = '开怀大笑'
+        memes.save_meme(self.folder, item)
+        with patch.object(memes, 'describe_image', side_effect=TimeoutError()):
+            item = memes.analyze_meme(self.folder, item)
+        self.assertEqual(item['auto_description'], '开怀大笑')
+        self.assertEqual(memes.selection_items([item])[0]['description'], '只用于鼓励')
+        legacy = {'id':'old', 'name':'old', 'description':'原有用途'}
+        self.assertEqual(memes.selection_items([legacy])[0]['description'], '原有用途')
+
+    def test_vision_receives_real_image_and_uses_fallback(self):
+        item = memes.add_meme(self.folder, self.raw, 'x', '')
+        config = types.ModuleType('config')
+        config.get_model_config = Mock(return_value=('https://example.invalid/v1', 'fake', 'vision-primary', 'vision-fallback'))
+        response = types.SimpleNamespace(choices=[types.SimpleNamespace(message=types.SimpleNamespace(content='温柔抱抱，用于安慰'))])
+        with patch.dict(sys.modules, config=config), patch('openai.OpenAI') as factory:
+            client = factory.return_value.__enter__.return_value
+            client.chat.completions.create.side_effect = [TimeoutError(), response]
+            result = memes.describe_image(self.folder / (item['id'] + '.png'))
+            self.assertEqual(result, '温柔抱抱，用于安慰')
+            call = client.chat.completions.create.call_args.kwargs
+            self.assertEqual(call['model'], 'vision-fallback')
+            self.assertTrue(call['messages'][1]['content'][1]['image_url']['url'].startswith('data:image/png;base64,'))
+            config.get_model_config.assert_called_once_with('vision')

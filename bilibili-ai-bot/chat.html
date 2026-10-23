@@ -1052,6 +1052,9 @@ body::before {
       <div class="nav-item" onclick="switchPanel('activity')">
         <span class="icon">📺</span> 活动日志
       </div>
+      <div class="nav-item" onclick="switchPanel('memes')">
+        <span class="icon">🖼️</span> 评论表情包
+      </div>
       <div class="nav-item" onclick="switchPanel('settings')">
         <span class="icon">⚙</span> 系统设置
       </div>
@@ -1360,6 +1363,40 @@ body::before {
 </div>
 
 <!-- 系统设置面板 -->
+<div id="panel-memes" class="panel">
+  <div class="panel-header">
+    <h2>🖼️ 评论表情包</h2>
+    <p>自动理解图片 · 自定义用途 · 评论智能配图</p>
+  </div>
+  <div class="panel-content">
+    <div class="settings-card">
+      <div class="settings-card-header"><span class="settings-card-title">智能配图</span></div>
+      <div class="settings-card-body">
+        <label><input id="memeEnabled" type="checkbox" onchange="setMemeEnabled(this)"> 评论时自动选择合适的表情包</label>
+        <p>根据对方评论和鲸鱼娘的回复语气选择一张图片。没有合适图片时只发文字。</p>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-header"><span class="settings-card-title">上传表情包</span></div>
+      <div class="settings-card-body">
+        <p>上传后使用系统设置中的视觉模型自动理解画面、文字、情绪和适用场景，无需逐张填写用途。图片会发送给已配置的视觉模型进行识别。</p>
+        <p>支持静态 PNG/JPEG/WebP/GIF，每张最多 5 MB，共 200 张。识别失败仍保留图片，可重试或手动填写用途。</p>
+        <div class="settings-field"><label>图片</label><input id="memeFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div>
+        <div class="settings-field"><label>名称（可选，默认使用文件名）</label><input id="memeName" maxlength="80" placeholder="例如：鲸鱼抱抱"></div>
+        <div class="settings-field"><label>自定义用途（可选，优先于自动识别）</label><textarea id="memeDescription" maxlength="500" placeholder="留空使用自动识别；也可填写：只用于安慰，不用于开玩笑"></textarea></div>
+        <button class="settings-btn primary" id="memeUploadButton" onclick="uploadCommentMeme()">上传并自动识别</button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-header"><span class="settings-card-title">我的表情包</span><button class="settings-btn small" onclick="loadCommentMemes()">刷新列表</button></div>
+      <div class="settings-card-body">
+        <p id="memeStatus" role="status"></p>
+        <div id="memeList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));gap:20px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="panel-settings" class="panel">
   <div class="panel-header">
     <h2>⚙ 系统设置</h2>
@@ -1662,21 +1699,6 @@ body::before {
     </div>
 
     <button class="settings-btn primary" onclick="saveAllModels()" style="margin-top:4px;width:100%;padding:12px;">💾 保存全部模型配置</button>
-
-    <div class="settings-card">
-      <div class="settings-card-header"><span class="settings-card-title">🖼️ 评论表情包库</span></div>
-      <div class="settings-card-body">
-        <p>开启“评论智能配表情包”后，根据对方评论和回复语气选择一张配图。无合适图片时只发文字。</p>
-        <p>上传静态 PNG/JPEG/WebP/GIF（每张最多 5 MB，共 200 张）。用途说明用于 AI 选择，例如“开心大笑，用于轻松玩笑；不用于安慰”。上传只保存在本地，实际评论时才上传到 B站。</p>
-        <div class="settings-field"><label>图片</label><input id="memeFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div>
-        <div class="settings-field"><label>名称</label><input id="memeName" maxlength="80" placeholder="例如：鲸鱼抱抱"></div>
-        <div class="settings-field"><label>用途说明</label><textarea id="memeDescription" maxlength="500" placeholder="例如：温柔安慰、鼓励、表达关心"></textarea></div>
-        <button class="settings-btn primary" id="memeUploadButton" onclick="uploadCommentMeme()">上传表情包</button>
-        <button class="settings-btn" onclick="loadCommentMemes()">刷新列表</button>
-        <p id="memeStatus" role="status"></p>
-        <div id="memeList" style="display:flex;flex-wrap:wrap;gap:16px"></div>
-      </div>
-    </div>
 
     <!-- 功能开关 -->
     <div class="settings-card">
@@ -2217,6 +2239,7 @@ function switchPanel(name) {
   if (name === 'watchlog') loadWatchlog(1);
   if (name === 'personality') loadPersonality();
   if (name === 'settings') loadSettings();
+  if (name === 'memes') loadMemePanel();
   if (name === 'persona') loadPersonas();
   if (name === 'activity') loadTodaySchedule();
   if (name === 'dynamiclog') loadDynamicLog();
@@ -3301,7 +3324,6 @@ const FEATURE_LABELS = {
   ENABLE_WEB_SEARCH: '联网搜索',
   ENABLE_PROACTIVE: '主动刷B站',
   ENABLE_MENTION_REPLIES: '评论区 @我后看视频回复',
-  ENABLE_COMMENT_MEMES: '评论智能配表情包',
   ENABLE_DYNAMIC: '发动态',
   ENABLE_PERSONALITY_EVOLUTION: '性格演化',
   ENABLE_MOOD: '每日心情',
@@ -3630,16 +3652,29 @@ loadSettings = async function() {
   loadMood();
   loadPrompts();
   loadBrandingSettings();
-  loadCommentMemes();
 };
 
 
 async function memeRequest(url, options) {
-  const response = await fetch(url, options);
+  const response = await apiFetch(url, options);
   let data;
   try { data = await response.json(); } catch (_) { throw new Error('请求失败，请检查图片大小或登录状态'); }
   if (!response.ok) throw new Error(data.error || '请求失败');
   return data;
+}
+async function loadMemePanel() {
+  try {
+    const features = await memeRequest('/api/features');
+    document.getElementById('memeEnabled').checked = !!features.ENABLE_COMMENT_MEMES;
+  } catch(e) { document.getElementById('memeStatus').textContent = e.message; }
+  await loadCommentMemes();
+}
+async function setMemeEnabled(input) {
+  input.disabled = true;
+  try {
+    await memeRequest('/api/features/update', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ENABLE_COMMENT_MEMES:input.checked})});
+  } catch(e) { input.checked = !input.checked; document.getElementById('memeStatus').textContent = e.message; }
+  finally { input.disabled = false; }
 }
 async function loadCommentMemes() {
   const status = document.getElementById('memeStatus');
@@ -3648,20 +3683,52 @@ async function loadCommentMemes() {
     const list = document.getElementById('memeList');
     list.replaceChildren();
     for (const item of data.items) {
-      const card = document.createElement('div'); card.style.cssText = 'width:180px;max-width:100%';
+      const card = document.createElement('div'); card.className = 'settings-card'; card.style.padding = '14px';
       const img = document.createElement('img'); img.src = '/api/comment_memes/' + item.id;
-      img.alt = item.name; img.loading = 'lazy'; img.style.cssText = 'width:100%;height:140px;object-fit:contain';
-      const name = document.createElement('strong'); name.textContent = item.name;
-      const description = document.createElement('p'); description.textContent = item.description;
-      description.style.overflowWrap = 'anywhere';
-      const button = document.createElement('button'); button.className = 'settings-btn small'; button.textContent = '删除';
-      button.onclick = async () => {
-        if (!confirm('删除表情包“' + item.name + '”？')) return;
-        button.disabled = true;
-        try { await memeRequest('/api/comment_memes/' + item.id, {method:'DELETE'}); await loadCommentMemes(); }
-        catch (e) { status.textContent = e.message; button.disabled = false; }
+      img.alt = item.name; img.loading = 'lazy'; img.style.cssText = 'width:100%;height:180px;object-fit:contain';
+      const auto = document.createElement('p'); auto.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere';
+      auto.textContent = '自动识别：' + (item.auto_description || '暂无识别结果');
+      const state = document.createElement('p');
+      state.textContent = item.analysis_status === 'failed'
+        ? '识别失败，请检查视觉模型设置后重试。已有描述仍可使用。'
+        : item.auto_description ? '已识别 · 自定义用途留空时使用自动结果' : '尚未识别 · 可点击下方识别按钮';
+      const nameField = document.createElement('div'); nameField.className = 'settings-field';
+      const nameLabel = document.createElement('label'); nameLabel.textContent = '名称';
+      const name = document.createElement('input'); name.maxLength = 80; name.value = item.name;
+      nameLabel.append(name); nameField.append(nameLabel);
+      const usageField = document.createElement('div'); usageField.className = 'settings-field';
+      const usageLabel = document.createElement('label'); usageLabel.textContent = '自定义用途（优先使用；清空恢复自动结果）';
+      const usage = document.createElement('textarea'); usage.maxLength = 500; usage.rows = 3; usage.value = item.description || '';
+      usageLabel.append(usage); usageField.append(usageLabel);
+      const message = document.createElement('p'); message.setAttribute('role', 'status');
+      const buttons = document.createElement('div'); buttons.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+      const save = document.createElement('button'); save.className = 'settings-btn primary'; save.textContent = '保存修改';
+      const analyze = document.createElement('button'); analyze.className = 'settings-btn'; analyze.textContent = '重新识别';
+      const remove = document.createElement('button'); remove.className = 'settings-btn'; remove.textContent = '删除';
+      const busy = (value) => { save.disabled = analyze.disabled = remove.disabled = value; };
+      save.onclick = async () => {
+        busy(true);
+        try {
+          await memeRequest('/api/comment_memes/' + item.id, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value,description:usage.value})});
+          message.textContent = '已保存，后续评论选图立即生效';
+        } catch(e) { message.textContent = e.message; } finally { busy(false); }
       };
-      card.append(img, name, description, button); list.append(card);
+      analyze.onclick = async () => {
+        busy(true); message.textContent = '正在理解图片，请稍候…';
+        try {
+          const result = await memeRequest('/api/comment_memes/' + item.id + '/analyze', {method:'POST'});
+          auto.textContent = '自动识别：' + (result.item.auto_description || '暂无识别结果');
+          state.textContent = result.item.analysis_status === 'ready' ? '已识别 · 自定义用途留空时使用自动结果' : '识别失败，可重试或手动填写用途';
+          message.textContent = result.item.analysis_status === 'ready' ? '识别完成，自定义用途保持不变' : '请检查系统设置中的视觉模型';
+        } catch(e) { message.textContent = e.message; } finally { busy(false); }
+      };
+      remove.onclick = async () => {
+        if (!confirm('删除表情包“' + name.value + '”？')) return;
+        busy(true);
+        try { await memeRequest('/api/comment_memes/' + item.id, {method:'DELETE'}); card.remove(); status.textContent = '已删除表情包'; }
+        catch(e) { message.textContent = e.message; busy(false); }
+      };
+      buttons.append(save, analyze, remove); card.append(img, state, auto, nameField, usageField, buttons, message); list.append(card);
     }
     status.textContent = data.items.length ? '已上传 ' + data.items.length + ' 张表情包' : '表情包库为空，上传后即可使用。';
   } catch(e) { status.textContent = e.message; }
@@ -3671,17 +3738,19 @@ async function uploadCommentMeme() {
   const file = document.getElementById('memeFile').files[0];
   const name = document.getElementById('memeName').value.trim();
   const description = document.getElementById('memeDescription').value.trim();
-  if (!file || !name || !description) { status.textContent = '请选择图片并填写名称和用途说明'; return; }
+  if (!file) { status.textContent = '请选择图片'; return; }
   if (file.size > 5 * 1024 * 1024) { status.textContent = '图片不能超过 5 MB'; return; }
-  const button = document.getElementById('memeUploadButton'); button.disabled = true;
+  const button = document.getElementById('memeUploadButton'); button.disabled = true; button.textContent = '上传并识别中…';
+  status.textContent = '正在上传并理解表情包，请稍候…';
   try {
     const form = new FormData(); form.append('image', file); form.append('name', name); form.append('description', description);
-    await memeRequest('/api/comment_memes', {method:'POST', body:form});
+    const result = await memeRequest('/api/comment_memes', {method:'POST', body:form});
     document.getElementById('memeFile').value = '';
     document.getElementById('memeName').value = ''; document.getElementById('memeDescription').value = '';
     await loadCommentMemes();
+    status.textContent = result.item.analysis_status === 'ready' ? '上传成功，已自动理解图片内容和用途' : '图片已保存，但自动识别失败。可检查视觉模型后重新识别，或直接填写自定义用途。';
   } catch(e) { status.textContent = e.message; }
-  finally { button.disabled = false; }
+  finally { button.disabled = false; button.textContent = '上传并自动识别'; }
 }
 
 // ===== 后端健康检测 =====
