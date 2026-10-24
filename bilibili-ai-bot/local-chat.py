@@ -10,6 +10,9 @@ from bili_login import BiliQrLoginManager
 
 # ========== 配置 ==========
 from config import *
+from persona_storage import load_json, save_json, active_persona, bind_persona, release_persona, data_path, persona_dir
+from flask import g, abort
+from persona_storage import valid_name
 
 # ========== 访问密码 ==========
 AUTH_PASSWORD = os.environ.get("CHAT_PASSWORD", "") or "admin()"
@@ -29,7 +32,15 @@ PERSONALITY_FILE = "data/personality_evolution.json"
 PERSONA_FILE = "data/personas.json"
 MOOD_FILE = "data/mood.json"
 BLOCK_LOG_FILE = "data/block_log.json"
-IMAGE_DIR = os.path.abspath("data/images")
+def image_dir():
+    directory = data_path("data/images")
+    directory.mkdir(parents=True, exist_ok=True)
+    return str(directory)
+
+
+def image_url(filename):
+    return f"/data/persona-images/{active_persona()}/{filename}"
+
 
 # The panel must be usable before API credentials have been configured.
 def make_optional_client(api_key, base_url):
@@ -99,8 +110,30 @@ app.permanent_session_lifetime = timedelta(days=30)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE") == "1")
 os.makedirs("data", exist_ok=True)
-os.makedirs(IMAGE_DIR, exist_ok=True)
+os.makedirs(image_dir(), exist_ok=True)
 bili_qr_login = BiliQrLoginManager()
+
+# Pin every request before any reads; a late reply must stay with its original persona.
+@app.before_request
+def bind_request_persona():
+    g.persona_token = bind_persona()
+    expected = request.headers.get("X-Persona") or request.args.get("persona")
+    if expected and expected != active_persona():
+        return jsonify(error="人格已在其他页面切换，请刷新后重试", persona_changed=True), 409
+
+
+@app.teardown_request
+def release_request_persona(error):
+    token = g.pop("persona_token", None)
+    if token is not None:
+        release_persona(token)
+
+
+@app.after_request
+def prevent_persona_cache(response):
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 # ========== 登录验证 ==========
 @app.before_request
@@ -163,16 +196,7 @@ def get_image_media_type(filename):
     return types.get(ext, 'image/png')
 
 # ========== 工具函数 ==========
-def load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return default
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def log_cost(source, input_tokens, output_tokens, model=""):
     """记录API调用费用，价格从config读取"""
@@ -307,7 +331,7 @@ def save_chat_history(history):
 # ========== API路由 ==========
 @app.route("/")
 def index():
-    return render_template("chat.html")
+    return render_template("chat.html", page_persona=active_persona())
 
 @app.route("/api/branding", methods=["GET"])
 def api_branding():
@@ -315,6 +339,7 @@ def api_branding():
     from config import get_raw_config
     cfg = get_raw_config()
     return jsonify({
+        "persona": active_persona(),
         "bot_name": cfg.get("BOT_NAME", "Bot"),
         "bot_avatar": cfg.get("BOT_AVATAR", "🤖"),
         "user_avatar": cfg.get("USER_AVATAR", "🌙"),
@@ -324,7 +349,14 @@ def api_branding():
 
 @app.route("/data/images/<filename>")
 def serve_image(filename):
-    return send_from_directory(IMAGE_DIR, filename)
+    return send_from_directory(image_dir(), filename)
+
+@app.route("/data/persona-images/<persona>/<filename>")
+def serve_persona_image(persona, filename):
+    if persona != active_persona():
+        abort(404)
+    return send_from_directory(image_dir(), filename)
+
 
 @app.route("/api/upload_image", methods=["POST"])
 def upload_image():
@@ -335,11 +367,11 @@ def upload_image():
         return jsonify({"error": "不支持的图片格式"}), 400
     ext = file.filename.rsplit('.', 1)[1].lower()
     filename = f"{uuid.uuid4().hex[:12]}.{ext}"
-    filepath = os.path.join(IMAGE_DIR, filename)
+    filepath = os.path.join(image_dir(), filename)
     file.save(filepath)
     if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
         return jsonify({"error": "图片保存失败"}), 500
-    return jsonify({"filename": filename, "url": f"/data/images/{filename}"})
+    return jsonify({"filename": filename, "url": image_url(filename)})
 
 @app.route("/api/chat/history", methods=["GET"])
 def chat_history():
@@ -354,7 +386,7 @@ def chat_history():
             "time": msg.get("time", ""),
         }
         if msg.get("image"):
-            item["image"] = f"/data/images/{msg['image']}"
+            item["image"] = image_url(msg['image'])
         items.append(item)
     return jsonify({"history": items})
 
@@ -487,11 +519,11 @@ def chat_imagine():
         # 通用图片提取函数
         def save_image_data(img_data):
             filename = f"gen_{uuid.uuid4().hex[:10]}.png"
-            filepath = os.path.join(IMAGE_DIR, filename)
+            filepath = os.path.join(image_dir(), filename)
             with open(filepath, "wb") as f:
                 f.write(img_data)
             log_cost("图片生成", 0, 0, model="image")
-            return f"/data/images/{filename}"
+            return image_url(filename)
 
         def try_decode_data_url(url_str):
             if url_str and url_str.startswith("data:image"):
@@ -589,7 +621,9 @@ def _generate_reply(user_msg, image_filename, context_history):
     # 验证图片
     image_path = None
     if image_filename:
-        image_path = os.path.join(IMAGE_DIR, image_filename)
+        if os.path.basename(image_filename) != image_filename or "/" in image_filename or "\\" in image_filename:
+            return None, "无效的图片文件名"
+        image_path = os.path.join(image_dir(), image_filename)
         if not os.path.exists(image_path) or os.path.getsize(image_path) == 0:
             image_filename = ""
             image_path = None
@@ -1010,6 +1044,8 @@ def api_update_config():
 
     # 允许空字符串（清空独立URL/Key = 回退到全局），只过滤None
     updates = {k: v for k, v in data.items() if v is not None}
+    if "ACTIVE_PERSONA" in updates:
+        return jsonify(ok=False, msg="请使用人格切换接口"), 400
     if "CHAT_PASSWORD" in updates:
         return jsonify({"ok": False, "msg": "请使用修改密码接口"}), 400
     if not updates:
@@ -1136,11 +1172,11 @@ def api_create_persona():
     import re
     slug = re.sub(r'[^a-zA-Z0-9_]', '', name.lower().replace(' ', '_'))
     if not slug:
-        slug = f"persona_{int(datetime.now().timestamp())}"
+        slug = f"persona_{uuid.uuid4().hex[:12]}"
     
     personas = _load_personas()
-    if any(p["name"] == slug for p in personas):
-        return jsonify({"error": "名称已存在"}), 400
+    if (data_path("data/personas.json").parent / "persona_data" / slug).exists() or any(p["name"] == slug for p in personas):
+        return jsonify({"error": "名称已存在或保留有历史数据，请使用其他名称"}), 400
     
     new_persona = {
         "name": slug,
@@ -1150,6 +1186,7 @@ def api_create_persona():
         "owner_prompt": data.get("owner_prompt", DEFAULT_PERSONA["owner_prompt"]),
         "is_default": False,
     }
+    persona_dir(slug)
     personas.append(new_persona)
     save_json(PERSONA_FILE, personas)
     return jsonify({"ok": True, "persona": new_persona})
@@ -1174,7 +1211,7 @@ def api_switch_persona():
     data = request.json
     name = data.get("name", "default")
     personas = _load_personas()
-    if not any(p["name"] == name for p in personas):
+    if not valid_name(name) or not any(p["name"] == name for p in personas):
         return jsonify({"error": "人格不存在"}), 404
     from config import update_config
     update_config({"ACTIVE_PERSONA": name})
@@ -1434,7 +1471,7 @@ def api_block_user():
 # ========== 数据导出 API ==========
 @app.route("/api/export", methods=["GET"])
 def api_export_data():
-    """导出所有数据为JSON"""
+    """导出当前人格的数据为JSON"""
     export = {
         "memory": load_json(MEMORY_FILE, []),
         "affection": load_json(AFFECTION_FILE, {}),
@@ -1442,7 +1479,8 @@ def api_export_data():
         "permanent_memory": load_json("data/permanent_memory.json", []),
         "personality": load_json(PERSONALITY_FILE, {}),
         "user_profiles": load_json(USER_PROFILE_FILE, {}),
-        "personas": load_json(PERSONA_FILE, []),
+        "persona": _get_active_persona(),
+        "settings": load_json("data/settings.json", {}),
         "mood": load_json(MOOD_FILE, {}),
         "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -1548,7 +1586,7 @@ def api_model_test():
 
 if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
-    os.makedirs(IMAGE_DIR, exist_ok=True)
+    os.makedirs(image_dir(), exist_ok=True)
     from datetime import timedelta
     app.permanent_session_lifetime = timedelta(days=30)
 

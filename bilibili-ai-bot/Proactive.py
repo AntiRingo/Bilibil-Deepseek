@@ -12,6 +12,7 @@ from video_preferences import order_videos
 
 # ========== 配置 ==========
 from config import *
+from persona_storage import load_json, save_json, active_persona, bind_persona, release_persona, data_path, persona_dir
 
 from config import PROACTIVE_VIDEO_COUNT, PROACTIVE_COMMENT_COUNT
 DAILY_WATCH_COUNT = PROACTIVE_VIDEO_COUNT
@@ -57,17 +58,6 @@ def generate_cookies_file():
         f.write(f".bilibili.com\tTRUE\t/\tFALSE\t0\tbili_jct\t{BILI_JCT}\n")
         f.write(f".bilibili.com\tTRUE\t/\tFALSE\t0\tDedeUserID\t{DEDE_USER_ID}\n")
     print(f"🍪 已从config.py生成cookies.txt")
-
-def load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return default
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def safe_pubdate(val):
     """把各种格式的pubdate统一转成时间戳"""
@@ -670,6 +660,17 @@ def save_external_memory(external_memory, bvid, video_info, video_description, c
 
 # ========== 主流程 ==========
 def run():
+    global TEMP_VIDEO_DIR, PREFERRED_TIDS
+    token = bind_persona(os.environ.get("BILI_JOB_PERSONA") or None)
+    try:
+        TEMP_VIDEO_DIR = str(persona_dir() / "temp_videos")
+        PREFERRED_TIDS = get_raw_config().get("PREFERRED_TIDS", PREFERRED_TIDS)
+        return _run_for_persona()
+    finally:
+        release_persona(token)
+
+
+def _run_for_persona():
     from config import PROACTIVE_LIKE, PROACTIVE_COIN, PROACTIVE_FAV, PROACTIVE_FOLLOW, PROACTIVE_COMMENT
     generate_cookies_file()
 

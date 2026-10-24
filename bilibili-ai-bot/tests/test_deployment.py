@@ -52,8 +52,9 @@ with patch("requests.sessions.Session.request", side_effect=AssertionError("Netw
     from wsgi import app
     import config
     assert Path(config.CONFIG_FILE).parent == Path.cwd()
-    assert Path("data/images").is_dir()
-    Path("data/images/private.png").write_bytes(b"private image")
+    from persona_storage import data_path
+    assert data_path("data/images").is_dir()
+    data_path("data/images/private.png").write_bytes(b"private image")
     client = app.test_client()
     assert client.get("/").status_code == 200
     assert client.get("/api/health").json["ok"] is True

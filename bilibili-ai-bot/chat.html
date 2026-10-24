@@ -989,6 +989,13 @@ body::before {
   #loginOverlay input[type="password"] { width: 150px !important; }
 }
 
+/* Persona workspace switch */
+.persona-switch-label { display:block; margin:16px 0 6px; color:var(--text-dim); font-size:12px; }
+.persona-switch { width:100%; padding:9px 10px; border:1px solid rgba(126,200,227,.3); border-radius:10px; background:var(--bg-dark); color:var(--text-main); font:inherit; cursor:pointer; }
+.persona-switch:focus-visible { outline:2px solid var(--ice-blue); outline-offset:2px; }
+.persona-switch:disabled { opacity:.5; cursor:wait; }
+.mobile-persona-switch { display:none; max-width:135px; width:auto; font-size:12px; }
+@media (max-width:768px) { .mobile-persona-switch { display:block; } }
 </style>
 
 
@@ -1028,7 +1035,9 @@ body::before {
   <div class="sidebar">
     <div class="sidebar-header">
       <h1 id="sidebarTitle">🤖 Bot</h1>
-      <p>本地聊天 · 共享记忆</p>
+      <p>每个人格，都有自己的故事</p>
+      <label class="persona-switch-label" for="personaQuickSwitch">当前人格</label>
+      <select class="persona-switch" id="personaQuickSwitch" aria-label="切换人格" onchange="switchPersona(this.value)" disabled><option>加载人格…</option></select>
     </div>
     <div class="sidebar-nav">
       <div class="nav-item active" onclick="switchPanel('chat')">
@@ -1064,7 +1073,7 @@ body::before {
         <span class="status-dot checking" id="sidebarStatusDot"></span>
         <span id="sidebarStatusText">检测后端...</span>
       </div>
-      <div>记忆与B站共享 · 聊天自动存档</div>
+      <div>同一人格与B站同步 · 人格间数据独立</div>
     </div>
   </div>
 
@@ -1074,6 +1083,7 @@ body::before {
       <div class="chat-panel">
         <div class="chat-header">
           <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+          <select class="persona-switch mobile-persona-switch" id="personaMobileSwitch" aria-label="切换人格" onchange="switchPersona(this.value)" disabled><option>加载中…</option></select>
           <div class="avatar" id="chatAvatar">🤖</div>
           <div class="chat-header-info">
             <h2 id="chatBotName">Bot</h2>
@@ -1400,6 +1410,7 @@ body::before {
 <div id="panel-settings" class="panel">
   <div class="panel-header">
     <h2>⚙ 系统设置</h2>
+    <p>外观、称呼和自定义提示词属于当前人格；API、模型、B站账号及功能开关由所有人格共用。</p>
     <p>Cookie管理 · API配置 · 模型切换</p>
   </div>
   <div class="panel-content">
@@ -1407,7 +1418,7 @@ body::before {
     <!-- Bot 外观设置 -->
     <div class="settings-card">
       <div class="settings-card-header">
-        <span class="settings-card-title">🎨 Bot 外观设置</span>
+        <span class="settings-card-title">🎨 当前人格 · 外观设置</span>
       </div>
       <div class="settings-card-body">
         <div class="settings-field">
@@ -1829,7 +1840,7 @@ body::before {
     <!-- 自定义提示词 -->
     <div class="settings-card">
       <div class="settings-card-header">
-        <span class="settings-card-title">📝 自定义提示词</span>
+        <span class="settings-card-title">📝 当前人格 · 自定义提示词</span>
       </div>
       <div class="settings-card-body">
         <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">留空=使用默认提示词，填写则覆盖对应场景</p>
@@ -1895,7 +1906,7 @@ body::before {
       </div>
       <div class="settings-card-body">
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="settings-btn" onclick="exportData()">📦 导出全部数据</button>
+          <button class="settings-btn" onclick="exportData()">📦 导出当前人格数据</button>
         </div>
       </div>
     </div>
@@ -1970,6 +1981,24 @@ body::before {
 </div>
 
 <script>
+// Pin this page's requests to its rendered persona, including uploads and settings.
+const PAGE_PERSONA = {{ page_persona | tojson }};
+const originalFetch = window.fetch.bind(window);
+window.fetch = async (input, options = {}) => {
+  const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+  if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+    const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
+    headers.set('X-Persona', PAGE_PERSONA);
+    options = {...options, headers};
+  }
+  const response = await originalFetch(input, options);
+  if (response.status === 409 && (await response.clone().json().catch(() => ({}))).persona_changed) {
+    location.reload();
+    throw new Error('人格已切换，正在刷新');
+  }
+  return response;
+};
+
 // ===== Toast 通知 =====
 function toast(msg, type = 'info', duration = 2500) {
   const container = document.getElementById('toastContainer');
@@ -1990,7 +2019,9 @@ async function checkAuth() {
     const data = await resp.json();
     if (data.authed) {
       document.getElementById('loginOverlay').style.display = 'none';
-      loadChatHistory();
+      await loadBranding();
+      await loadPersonas();
+      await loadChatHistory();
     } else {
       document.getElementById('loginOverlay').style.display = 'flex';
       document.getElementById('loginPassword').focus();
@@ -2013,7 +2044,9 @@ async function doLogin() {
     const data = await resp.json();
     if (data.ok) {
       document.getElementById('loginOverlay').style.display = 'none';
-      loadChatHistory();
+      await loadBranding();
+      await loadPersonas();
+      await loadChatHistory();
     } else {
       errEl.textContent = data.error || '密码错误';
       errEl.style.display = 'block';
@@ -2228,7 +2261,7 @@ function switchPanel(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
-  if (event && event.currentTarget) event.currentTarget.classList.add('active');
+  if (typeof event !== 'undefined' && event && event.currentTarget) event.currentTarget.classList.add('active');
   if (name === 'users') loadUsers();
   if (name === 'blocks') loadBlocks();
   if (name === 'memory') loadMemory(1);
@@ -3202,6 +3235,11 @@ async function loadPersonas() {
     const data = await resp.json();
     const list = document.getElementById('personaList');
     const active = data.active;
+    for (const id of ['personaQuickSwitch', 'personaMobileSwitch']) {
+      const select = document.getElementById(id);
+      select.replaceChildren(...data.personas.map(p => new Option(p.display_name, p.name, false, p.name === active)));
+      select.disabled = false;
+    }
     list.innerHTML = data.personas.map(p => `
       <div class="user-card" style="flex-direction:column;align-items:stretch;gap:8px;${p.name === active ? 'border-color:var(--ice-blue);background:rgba(126,200,227,0.08);' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -3220,11 +3258,23 @@ async function loadPersonas() {
   } catch(e) { console.error(e); }
 }
 
+let personaSwitchPending = false;
 async function switchPersona(name) {
+  if (!name || name === PAGE_PERSONA || personaSwitchPending) return;
+  personaSwitchPending = true;
+  const selects = ['personaQuickSwitch', 'personaMobileSwitch'].map(id => document.getElementById(id));
+  selects.forEach(el => el.disabled = true);
   try {
-    await apiFetch('/api/personas/switch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-    loadPersonas();
-  } catch(e) { toast('切换失败', 'error'); }
+    const resp = await apiFetch('/api/personas/switch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || '切换失败');
+    // Recreate every panel, pending upload and form from the new persona's state.
+    location.reload();
+  } catch(e) {
+    toast(e.message || '切换失败', 'error');
+    personaSwitchPending = false;
+    selects.forEach(el => { el.value = PAGE_PERSONA; el.disabled = false; });
+  }
 }
 
 async function editPersona(name) {
@@ -3259,6 +3309,7 @@ async function savePersonaEdit() {
     if (data.ok) {
       document.getElementById('personaEditArea').style.display = 'none';
       loadPersonas();
+      loadBranding();
     } else toast(data.error || '保存失败', 'error');
   } catch(e) { toast('保存失败', 'error'); }
 }
@@ -3304,7 +3355,8 @@ async function deletePersona(name) {
   if (!confirm('确定删除此人格？')) return;
   try {
     await apiFetch('/api/personas/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-    loadPersonas();
+    if (name === PAGE_PERSONA) location.reload();
+    else loadPersonas();
   } catch(e) { toast('删除失败', 'error'); }
 }
 
@@ -3314,8 +3366,8 @@ async function resetPersona() {
   try {
     const resp = await apiFetch('/api/personas/reset', {method:'POST'});
     const data = await resp.json();
-    toast(data.msg || '已重置', 'success');
-    loadPersonas();
+    if (!resp.ok) throw new Error(data.error || '重置失败');
+    location.reload();
   } catch(e) { toast('重置失败', 'error'); }
 }
 

@@ -17,6 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ========== 配置 ==========
 from config import *
+from persona_storage import load_json, save_json, active_persona, bind_persona, release_persona, data_path, persona_dir
 from mentions import MentionClient, inspect_video
 from moderation import Moderation
 from model_options import short_response_options
@@ -376,17 +377,6 @@ def is_blocked(text):
     return any(kw in text for kw in BLOCK_KEYWORDS)
 
 # ========== 持久化 ==========
-def load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return default
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
 def load_replied():
     return set(load_json(REPLIED_FILE, []))
 
@@ -1255,7 +1245,12 @@ def run():
     last_config_reload = time.time()
     last_cookie_check = time.time()
     while True:
+        persona_token = bind_persona()
         try:
+            affection = load_json(AFFECTION_FILE, {str(OWNER_MID): 100})
+            memory = load_memory()
+            video_cache = load_json(VIDEO_MEMORY_FILE, {})
+            user_profiles = load_user_profiles()
             now = datetime.now()
 
             # 每5分钟热更新配置
@@ -1299,13 +1294,13 @@ def run():
                 for h, m in proactive_times:
                     key = f"{h}:{m:02d}"
                     if key not in proactive_triggered and (now.hour > h or (now.hour == h and now.minute >= m)):
-                        subprocess.Popen([PYTHON, os.path.join(BASE_DIR, "Proactive.py")])
+                        subprocess.Popen([PYTHON, os.path.join(BASE_DIR, "Proactive.py")], env={**os.environ, "BILI_JOB_PERSONA": active_persona()})
                         proactive_triggered.add(key)
                         save_schedule_state()
                         print(f"🎯 触发主动评论（{h}:{m:02d}）")
 
             if ENABLE_DYNAMIC and not dynamic_triggered and (now.hour > dynamic_time[0] or (now.hour == dynamic_time[0] and now.minute >= dynamic_time[1])):
-                subprocess.Popen([PYTHON, os.path.join(BASE_DIR, "dynamic.py")])
+                subprocess.Popen([PYTHON, os.path.join(BASE_DIR, "dynamic.py")], env={**os.environ, "BILI_JOB_PERSONA": active_persona()})
                 dynamic_triggered = True
                 save_schedule_state()
                 print(f"📢 触发动态发布（{dynamic_time[0]}:{dynamic_time[1]:02d}）")
@@ -1492,6 +1487,8 @@ def run():
         except Exception as e:
             print(f"⚠️ 出错了：{e}，30秒后重试...")
             time.sleep(30)
+        finally:
+            release_persona(persona_token)
 
 if __name__ == "__main__":
     run()

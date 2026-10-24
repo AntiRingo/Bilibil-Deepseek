@@ -15,6 +15,7 @@ from datetime import datetime
 STATE_DIR = os.environ.get("BILI_STATE_DIR", "")
 if STATE_DIR:
     STATE_DIR = os.path.abspath(STATE_DIR)
+    os.environ["BILI_STATE_DIR"] = STATE_DIR
     os.makedirs(STATE_DIR, exist_ok=True)
     os.chdir(STATE_DIR)
 CONFIG_FILE = os.path.join(STATE_DIR or os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -172,6 +173,10 @@ def _ensure_config_file():
 
 _ensure_config_file()
 _cfg = _load_config()
+import persona_storage as _ps
+_ps.initialize(_cfg)
+from persona_presets import ensure_builtin_personas as _ensure_builtin_personas
+_ensure_builtin_personas()
 
 # ========== 导出变量（兼容 from config import *） ==========
 SESSDATA = _cfg["SESSDATA"]
@@ -323,15 +328,22 @@ def reload_config():
 
 def update_config(updates: dict):
     """更新部分配置并保存"""
-    cfg = _load_config()
-    cfg.update(updates)
-    _save_config(cfg)
+    with _ps.state_lock():
+        cfg = _load_config()
+        personal = {k: v for k, v in updates.items() if _ps.personal_key(k)}
+        if personal:
+            path = _ps.persona_dir() / "settings.json"
+            settings = _ps.read_json(path, {})
+            settings.update(personal)
+            _ps.write_json(path, settings)
+        cfg.update({k: v for k, v in updates.items() if not _ps.personal_key(k)})
+        _save_config(cfg)
     reload_config()
-    return cfg
+    return get_raw_config()
 
 def get_config():
     """获取当前配置（脱敏版，隐藏密钥中间部分）"""
-    cfg = _load_config()
+    cfg = get_raw_config()
     safe = {}
     for k, v in cfg.items():
         if isinstance(v, str) and ("KEY" in k or "TOKEN" in k or "SESSDATA" in k or "JCT" in k) and len(v) > 10:
@@ -342,7 +354,7 @@ def get_config():
 
 def get_raw_config():
     """获取原始配置（不脱敏，仅后端使用）"""
-    return _load_config()
+    return _ps.effective_config(_load_config(), _DEFAULTS)
 
 # ========== 获取各模型的 API 配置 ==========
 def get_model_config(model_type):

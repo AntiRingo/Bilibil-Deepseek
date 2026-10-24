@@ -9,6 +9,7 @@ from openai import OpenAI
 
 # ========== 配置 ==========
 from config import *
+from persona_storage import load_json, save_json, active_persona, bind_persona, release_persona, data_path, persona_dir
 
 DYNAMIC_LOG_FILE = "data/dynamic_log.json"
 PERMANENT_MEMORY_FILE = "data/permanent_memory.json"
@@ -26,18 +27,6 @@ or_client = OpenAI(
 )
 
 # ========== 工具函数 ==========
-def load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return default
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-# ========== 生成动态文案和图片prompt ==========
 def generate_dynamic_content():
     """让Claude生成动态文案和可选的图片描述"""
     perm = load_json(PERMANENT_MEMORY_FILE, [])
@@ -235,7 +224,7 @@ def generate_image(prompt):
             if img_url.startswith("data:image"):
                 img_b64 = img_url.split(",", 1)[1]
                 img_data = base64.b64decode(img_b64)
-                save_path = "temp_dynamic.png"
+                save_path = str(persona_dir() / "temp_dynamic.png")
                 with open(save_path, "wb") as f:
                     f.write(img_data)
                 print(f"🖼️ Flux生图成功（images字段，{len(img_data)//1024}KB）")
@@ -250,7 +239,7 @@ def generate_image(prompt):
             match = re.search(r'data:image/\w+;base64,([A-Za-z0-9+/=]+)', content)
             if match:
                 img_data = base64.b64decode(match.group(1))
-                save_path = "temp_dynamic.png"
+                save_path = str(persona_dir() / "temp_dynamic.png")
                 with open(save_path, "wb") as f:
                     f.write(img_data)
                 print(f"🖼️ Flux生图成功（content字段，{len(img_data)//1024}KB）")
@@ -264,7 +253,7 @@ def generate_image(prompt):
                     if img_url.startswith("data:image"):
                         img_b64 = img_url.split(",", 1)[1]
                         img_data = base64.b64decode(img_b64)
-                        save_path = "temp_dynamic.png"
+                        save_path = str(persona_dir() / "temp_dynamic.png")
                         with open(save_path, "wb") as f:
                             f.write(img_data)
                         print(f"🖼️ Flux生图成功（多模态格式，{len(img_data)//1024}KB）")
@@ -278,7 +267,8 @@ def generate_image(prompt):
         return None
 
 # ========== 下载图片 ==========
-def download_image(url, save_path="temp_dynamic.png"):
+def download_image(url, save_path=None):
+    save_path = save_path or str(persona_dir() / "temp_dynamic.png")
     """下载图片到本地"""
     try:
         resp = requests.get(url, timeout=30)
@@ -388,6 +378,14 @@ def post_dynamic_with_image(text, img_info):
 
 # ========== 主流程 ==========
 def run():
+    token = bind_persona(os.environ.get("BILI_JOB_PERSONA") or None)
+    try:
+        return _run_for_persona()
+    finally:
+        release_persona(token)
+
+
+def _run_for_persona():
     from config import get_raw_config as _grc_run
     _run_cfg = _grc_run()
     _bot = _run_cfg.get("BOT_NAME", "Bot")

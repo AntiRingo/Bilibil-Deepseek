@@ -14,8 +14,8 @@ MAX_BYTES = 5 * 1024 * 1024
 
 
 def library_dir():
-    from config import STATE_DIR
-    return Path(STATE_DIR or Path(__file__).resolve().parent) / "data" / "comment_memes"
+    from persona_storage import data_path
+    return data_path("data/comment_memes")
 
 
 def list_memes(folder):
