@@ -66,8 +66,11 @@ with patch("requests.sessions.Session.request", side_effect=AssertionError("netw
     fake = Mock()
     fake.with_options.return_value = fake
     fake.chat.completions.create.side_effect = [completion(json.dumps({'text':candidate})), completion('{"approved":true}')]
-    with patch.object(dynamic, 'or_client', fake):
+    with patch.object(dynamic, 'or_client', fake), patch.object(dynamic, 'OR_CHAT_MODEL', 'deepseek-flash'):
         assert dynamic.generate_angelina_diary(life) == candidate
+    assert len(fake.chat.completions.create.call_args_list) == 2
+    for call in fake.chat.completions.create.call_args_list:
+        assert call.kwargs['extra_body']['thinking']['type'] == 'disabled'
     fake.chat.completions.create.side_effect = [completion(json.dumps({'text':candidate})), completion('{"approved":false}')]
     with patch.object(dynamic, 'or_client', fake):
         assert dynamic.generate_angelina_diary(life) == angelina_life.fallback(life)
