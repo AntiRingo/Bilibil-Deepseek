@@ -52,10 +52,38 @@ with patch("requests.sessions.Session.request", side_effect=AssertionError("netw
     assert client.post('/api/personas/switch', json={'name':'angelina'}).json['ok']
     assert client.get('/api/chat/history').json['history'] == []
     assert client.get('/api/branding').json['bot_name'] == '安洁莉娜'
+    assert client.get('/api/life').json['life']['current']['location'] == '罗德岛本舰'
+    schedule = client.get('/api/schedule/today').json
+    assert schedule['dynamic_time'] == '21:30' and schedule['timezone'] == 'Asia/Shanghai'
+    import dynamic
+    import angelina_life
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    life = angelina_life.timeline()
+    candidate = '今天忙完以后，捧着杯子看热气一点点散掉，忽然觉得这样发一小会儿呆也很好。刚才还惦记着背包里的东西有没有收好，坐下来才终于松了口气。博士，你今天有没有遇到一点让自己开心的小事？'
+    def completion(text):
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+    fake = Mock()
+    fake.with_options.return_value = fake
+    fake.chat.completions.create.side_effect = [completion(json.dumps({'text':candidate})), completion('{"approved":true}')]
+    with patch.object(dynamic, 'or_client', fake):
+        assert dynamic.generate_angelina_diary(life) == candidate
+    fake.chat.completions.create.side_effect = [completion(json.dumps({'text':candidate})), completion('{"approved":false}')]
+    with patch.object(dynamic, 'or_client', fake):
+        assert dynamic.generate_angelina_diary(life) == angelina_life.fallback(life)
+    fake.chat.completions.create.side_effect = TimeoutError
+    with patch.object(dynamic, 'or_client', fake):
+        assert dynamic.generate_angelina_diary(life) == angelina_life.fallback(life)
+    with patch.object(dynamic, 'post_dynamic_text') as publish:
+        config.update_config({'ENABLE_DYNAMIC':False})
+        assert dynamic._run_for_persona() is False
+        publish.assert_not_called()
+        config.update_config({'ENABLE_DYNAMIC':True})
     assert config.get_raw_config()['OWNER_NAME'] == '博士'
     assert client.get('/api/permanent/list').json['items'] == []
     assert client.post('/api/personas/switch', json={'name':'legacy'}).json['ok']
     assert client.get('/api/branding').json['bot_name'] == 'Old name'
+    assert client.get('/api/life').json['life'] is None
     assert client.get('/api/chat/history').json['history'][0]['content'] == 'old chat'
     assert client.get('/data/images/old.png').data == b'old image'
     assert Path('data/memory.json').exists()  # migration preserves source

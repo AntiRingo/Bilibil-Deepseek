@@ -21,6 +21,7 @@ from persona_storage import load_json, save_json, active_persona, bind_persona, 
 from mentions import MentionClient, inspect_video
 from moderation import Moderation
 from model_options import short_response_options
+import angelina_life
 from private_messages import (
     PrivateMessageClient,
     assess_private_message,
@@ -1006,6 +1007,7 @@ def generate_reply_and_score(comment_text, username, level, memory_context, chan
 """
 
     prompt = f"""{persona_section}
+{angelina_life.context()}
 {get_personality_prompt()}
 
 {_final_style}{_bili_note}
@@ -1299,7 +1301,10 @@ def run():
                         save_schedule_state()
                         print(f"🎯 触发主动评论（{h}:{m:02d}）")
 
-            if ENABLE_DYNAMIC and not dynamic_triggered and (now.hour > dynamic_time[0] or (now.hour == dynamic_time[0] and now.minute >= dynamic_time[1])):
+            if ENABLE_DYNAMIC and angelina_life.due():
+                subprocess.Popen([PYTHON, os.path.join(BASE_DIR, "dynamic.py")], env={**os.environ, "BILI_JOB_PERSONA": active_persona()})
+
+            if not angelina_life.enabled() and ENABLE_DYNAMIC and not dynamic_triggered and (now.hour > dynamic_time[0] or (now.hour == dynamic_time[0] and now.minute >= dynamic_time[1])):
                 subprocess.Popen([PYTHON, os.path.join(BASE_DIR, "dynamic.py")], env={**os.environ, "BILI_JOB_PERSONA": active_persona()})
                 dynamic_triggered = True
                 save_schedule_state()

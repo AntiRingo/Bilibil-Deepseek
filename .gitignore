@@ -10,3 +10,4 @@ backups/
 *.pem
 *.key
 server-info.local.*
+服务器面板登录信息.txt

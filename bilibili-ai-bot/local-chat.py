@@ -13,6 +13,7 @@ from config import *
 from persona_storage import load_json, save_json, active_persona, bind_persona, release_persona, data_path, persona_dir
 from flask import g, abort
 from persona_storage import valid_name
+import angelina_life
 
 # ========== 访问密码 ==========
 AUTH_PASSWORD = os.environ.get("CHAT_PASSWORD", "") or "admin()"
@@ -656,6 +657,7 @@ def _generate_reply(user_msg, image_filename, context_history):
     bot_name = _bot_cfg.get("BOT_NAME", "Bot")
 
     system_prompt = f"""{persona.get('system_prompt', '')}
+{angelina_life.context()}
 {personality_evolution}
 
 {persona.get('style_prompt', '')}
@@ -989,7 +991,22 @@ def proactive_list():
 def schedule_today():
     """返回今天的触发计划（ai.py 生成的随机时间）"""
     schedule = load_json("data/schedule_today.json", {})
+    if angelina_life.enabled():
+        from config import get_raw_config
+        today = angelina_life.now_local().date().isoformat()
+        if schedule.get("date") != today:
+            schedule = {"date": today}
+        delivery = load_json(angelina_life.DELIVERY, {}).get(today, {})
+        posted = any(p.get("time", "").startswith(today) for p in load_json("data/dynamic_log.json", []))
+        schedule.update(dynamic_time=angelina_life.NIGHT_TIME, dynamic_triggered=posted,
+                        dynamic_status="published" if posted else delivery.get("status", "waiting"),
+                        dynamic_enabled=get_raw_config().get("ENABLE_DYNAMIC", True), timezone="Asia/Shanghai")
     return jsonify(schedule)
+
+
+@app.route("/api/life", methods=["GET"])
+def life_timeline():
+    return jsonify({"life": angelina_life.timeline()})
 
 @app.route("/api/dynamic/list", methods=["GET"])
 def dynamic_list():
