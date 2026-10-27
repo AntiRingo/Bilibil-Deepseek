@@ -54,7 +54,8 @@ with patch("requests.sessions.Session.request", side_effect=AssertionError("netw
     assert client.get('/api/branding').json['bot_name'] == '安洁莉娜'
     assert client.get('/api/life').json['life']['current']['location'] == '罗德岛本舰'
     schedule = client.get('/api/schedule/today').json
-    assert schedule['dynamic_time'] == '21:30' and schedule['timezone'] == 'Asia/Shanghai'
+    assert schedule['dynamic_mode'] == 'contextual' and schedule['timezone'] == 'Asia/Shanghai'
+    assert schedule['dynamic_time'] == '随情境评估'
     import dynamic
     import angelina_life
     from types import SimpleNamespace
@@ -65,18 +66,18 @@ with patch("requests.sessions.Session.request", side_effect=AssertionError("netw
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
     fake = Mock()
     fake.with_options.return_value = fake
-    fake.chat.completions.create.side_effect = [completion(json.dumps({'text':candidate})), completion('{"approved":true}')]
+    fake.chat.completions.create.side_effect = [completion(json.dumps({'publish': True, 'text':candidate})), completion('{"approved":true}')]
     with patch.object(dynamic, 'or_client', fake), patch.object(dynamic, 'OR_CHAT_MODEL', 'deepseek-flash'):
         assert dynamic.generate_angelina_diary(life) == candidate
     assert len(fake.chat.completions.create.call_args_list) == 2
     for call in fake.chat.completions.create.call_args_list:
         assert call.kwargs['extra_body']['thinking']['type'] == 'disabled'
-    fake.chat.completions.create.side_effect = [completion(json.dumps({'text':candidate})), completion('{"approved":false}')]
+    fake.chat.completions.create.side_effect = [completion(json.dumps({'publish': True, 'text':candidate})), completion('{"approved":false}')]
     with patch.object(dynamic, 'or_client', fake):
-        assert dynamic.generate_angelina_diary(life) == angelina_life.fallback(life)
+        assert dynamic.generate_angelina_diary(life) is None
     fake.chat.completions.create.side_effect = TimeoutError
     with patch.object(dynamic, 'or_client', fake):
-        assert dynamic.generate_angelina_diary(life) == angelina_life.fallback(life)
+        assert dynamic.generate_angelina_diary(life) is None
     with patch.object(dynamic, 'post_dynamic_text') as publish:
         config.update_config({'ENABLE_DYNAMIC':False})
         assert dynamic._run_for_persona() is False

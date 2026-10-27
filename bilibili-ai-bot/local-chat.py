@@ -1007,7 +1007,7 @@ def schedule_today():
                         proactive_triggered=sessions.get("slots", []) if sessions.get("date") == today else [],
                         browsing=browsing,
                         proactive_enabled=get_raw_config().get("ENABLE_PROACTIVE", True))
-        schedule.update(dynamic_time=angelina_life.NIGHT_TIME, dynamic_triggered=posted,
+        schedule.update(dynamic_time="随情境评估", dynamic_mode="contextual", dynamic_triggered=posted,
                         dynamic_status="published" if posted else delivery.get("status", "waiting"),
                         dynamic_enabled=get_raw_config().get("ENABLE_DYNAMIC", True), timezone="Asia/Shanghai")
     return jsonify(schedule)

@@ -2793,7 +2793,7 @@ async function loadTodaySchedule() {
     const proTimes = data.proactive_times || [];
     const proTriggered = data.proactive_triggered || [];
     const dynTime = data.dynamic_time || '--:--';
-    const statusLabels = {waiting:'等待今晚发布', pending:'发布中或等待核实', published:'已发布', unconfirmed:'未确认成功，请核对B站动态，避免重复发送'};
+    const statusLabels = {waiting:'等待合适的分享时机', skipped:'本次跳过，等待新内容', pending:'发布中或等待核实', published:'已发布', unconfirmed:'未确认成功，请核对B站动态，避免重复发送'};
     const dynStatus = data.dynamic_enabled === false ? '自动动态已关闭' : (statusLabels[data.dynamic_status] || '');
     const dynDone = data.dynamic_triggered;
 
@@ -2844,12 +2844,12 @@ async function loadAngelinaLife() {
     const {life} = await resp.json();
     if (!life) { el.innerHTML = ''; return; }
     const schedule = await (await apiFetch('/api/schedule/today')).json();
-    const labels = {waiting:'等待今晚发布', pending:'发布中或等待核实', published:'今晚已发布', unconfirmed:'未确认发布成功，请核对B站后处理'};
+    const labels = {waiting:'等待合适的分享时机', skipped:'本次跳过，等待新内容', pending:'发布中或等待核实', published:'今天已发布', unconfirmed:'未确认发布成功，请核对B站后处理'};
     const status = schedule.dynamic_enabled === false ? '自动动态已关闭' : (labels[schedule.dynamic_status] || '');
     el.innerHTML = `<div class="user-card" style="display:block;line-height:1.8;">
       <strong>安洁莉娜的近况</strong>
       <div>📍 ${escapeHtml(life.current.location)} · ${escapeHtml(life.current.kind)}</div>
-      <div style="color:var(--text-dim);font-size:12px;">${escapeHtml(life.date)} · 每晚北京时间21:30 · ${escapeHtml(status)}</div>
+      <div style="color:var(--text-dim);font-size:12px;">${escapeHtml(life.date)} · 结合时间、日程与最近交流择机分享 · ${escapeHtml(status)}</div>
       <details style="margin-top:8px;"><summary>查看生活行程</summary>
       ${life.legs.map(leg => `<div style="margin-top:8px;font-size:13px;">${escapeHtml(leg.start)} — ${escapeHtml(leg.end)}<br>${escapeHtml(leg.location)} · ${escapeHtml(leg.kind)}</div>`).join('')}
       <div style="font-size:12px;color:var(--text-dim);margin-top:10px;">符合泰拉背景的原创日常行程；日期用于生活记录，不对应官方剧情年表。</div>

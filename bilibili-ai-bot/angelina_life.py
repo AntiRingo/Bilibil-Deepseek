@@ -2,13 +2,17 @@
 from datetime import datetime, date, timedelta, timezone
 import json
 import random
+import re
+from difflib import SequenceMatcher
 
 from persona_storage import active_persona, load_json, save_json, state_lock
 
 TZ = timezone(timedelta(hours=8))
 FILE = "data/angelina_life.json"
 DELIVERY = "data/angelina_delivery.json"
-NIGHT_TIME = "21:30"
+# These are opportunities to evaluate, never promises to publish.
+POST_HOURS = {"驻舰": (9, 12, 18, 21), "送信": (12, 20),
+              "去程": (12, 19), "返程": (12, 19), "休假": (10, 15, 20)}
 LORE = """以原版安洁莉娜为准：叙拉古出身的沃尔珀、感染者、罗德岛信使与辅助干员，
 源石技艺影响轻重，不是瞬间传送。温柔明快、认真送信，对博士有含蓄好感。
 故事发生在泰拉。罗德岛本舰是移动陆行舰；龙门是移动城市；汐斯塔有海滨旅游背景。
@@ -84,67 +88,92 @@ def context(now=None):
             + json.dumps([p.get("text", "") for p in posts], ensure_ascii=False))
 
 
-def fallback(life):
-    leg = life["current"]
-    moments = {
-        "驻舰": [
-            "忙完手里的事情，捧着杯子发了一小会儿呆。原来什么都不赶的时候，热气慢慢散掉也能看很久呀。今天没有特别了不起的事，不过这样安稳的一天，我也很喜欢。",
-            "今天整理东西时，发现背包里还夹着一张没写完的小纸条。原本想记下一件有趣的事，结果只写了一半……现在反倒想不起后半句了。下次还是一想到就告诉博士好了。",
-            "今天给自己留了一点发呆的时间，连背包都好好放到了旁边。总觉得还有什么要忙，坐了一会儿才反应过来：今天的事情已经做完啦。这样的小空闲，也想分给博士一点。"],
-        "送信": [
-            "今天递出信的时候，不自觉地又把信封的边角抚平了一遍。路上一直小心护着，真交到对方手里，才终于松了口气。回去的脚步都有点轻了。嘿嘿，一封信平安到达，真的会让人开心很久。",
-            "送完今天的信，才发现自己把背包带攥得有点紧。松开手，慢慢走了一小段路，街上的声音好像也一下清楚了。原来忙起来的时候，会漏掉这么多小小的热闹呀。",
-            "今天核对完回执，认真把它们收在了不会折到的地方。背包轻了一些，心里却像多装了点什么。大概是终于把惦记着的事做好了吧。博士，你今天有没有这样松一口气的时候？"],
-        "去程": [
-            "今天趁停靠的空当翻了翻笔记，想把路上的见闻记下来。结果第一句写得太认真，后面反倒不知道怎么接了。还是先记几个小词吧，等回来慢慢讲给你听。现在有一点想念舰上的日常了。",
-            "今天休息时重新整理了一遍背包，把常用的东西放到伸手就能拿到的位置。每次出门都觉得自己准备得更熟练了一点，真的上路以后，心里还是会悄悄期待遇见些什么。"],
-        "返程": [
-            "今天整理背包，才发现一路上舍不得扔的小纸片已经攒了好几张。明明没什么特别的，看到它们却能想起当时的心情。先收好吧，回去的时候，想挑几件有趣的小事讲给你听。",
-            "今天在笔记末尾留了一页空白，本来准备回来再补上。看着看着，就开始想回到舰上以后先做什么了。好像只要想到熟悉的地方，路上的一点疲惫就没那么难熬了。"],
-        "休假": [
-            "今天在海边待得比自己想的久一点。原本只是想散散步，听着浪声，就不太舍得马上走了。平时总想着下一件要做的事，今天终于可以慢慢来。这样的声音，要是也能带回去给你听就好了。",
-            "今天挑明信片时犹豫了好久，觉得这张好看，另一张也想留下。最后才发现，比起挑选，我好像更期待在背面写些什么。先不告诉博士，等我想好一句满意的再说。",
-            "今天整理小纪念品，把它们摆开又收好，忍不住笑了。出门前明明还想把行李带得轻一点呀。不过每一样都能让我想起一个小瞬间，多一点重量也没关系。"],
-    }
-    index = date.fromisoformat(life["date"]).toordinal()
-    moment = moments[leg["kind"]][index % len(moments[leg["kind"]])]
-    extra = ""
-    if leg["kind"] == "送信" and index % 5 == 0:
-        extra = "博士，要不要我回去时带点当地的小点心？有合适的我就留意一下。"
-    elif leg["kind"] == "休假" and index % 3 == 0:
-        extra = "下次休假，博士如果也有空，要不要一起出来走走？"
-    return f"{moment}{extra}"
-
-
-def due(now=None):
+def recent_messages(now=None):
+    """Bound context to actual recent interactions, excluding generated summaries/posts."""
     now = local_time(now)
-    if not enabled() or now.strftime("%H:%M") < NIGHT_TIME:
+    result = []
+    for item in load_json("data/memory.json", []):
+        if item.get("thread_id") in ("summary", "dynamic") or str(item.get("rpid", "")).startswith("compressed_"):
+            continue
+        try:
+            # Legacy memory writers use host-local wall time; explicit offsets are respected.
+            stamp = datetime.fromisoformat(item.get("time", ""))
+            stamp = stamp.astimezone(TZ)
+        except (TypeError, ValueError):
+            continue
+        if timedelta(0) <= now - stamp <= timedelta(hours=48) and item.get("text"):
+            result.append({"time": stamp.isoformat(), "text": str(item["text"])[:1000]})
+    return sorted(result, key=lambda item: item["time"])[-12:]
+
+
+def repeated(text, posts=None):
+    """Ignore punctuation and catch close rewrites before any outbound request."""
+    normalize = lambda value: re.sub(r"[\W_]+", "", value).casefold()
+    candidate = normalize(text)
+    if not candidate:
+        return True
+    posts = load_json("data/dynamic_log.json", [])[-100:] if posts is None else posts
+    for post in posts:
+        previous = normalize(post.get("text", ""))
+        if not previous:
+            continue
+        if candidate in previous or previous in candidate:
+            return True
+        if SequenceMatcher(None, candidate, previous, autojunk=False).ratio() >= 0.65:
+            return True
+        grams = lambda value: {value[i:i + 3] for i in range(len(value) - 2)}
+        left, right = grams(candidate), grams(previous)
+        if left and right and len(left & right) / min(len(left), len(right)) >= 0.55:
+            return True
+    return False
+
+
+def due(now=None, life=None):
+    now = local_time(now)
+    if not enabled():
+        return False
+    life = life or timeline(now)
+    if not life or now.hour not in POST_HOURS.get(life["current"]["kind"], ()):
         return False
     day = now.date().isoformat()
     if any(p.get("time", "").startswith(day) for p in load_json("data/dynamic_log.json", [])):
         return False
-    return day not in load_json(DELIVERY, {})
+    delivery = load_json(DELIVERY, {}).get(day, {})
+    if not delivery:
+        return True
+    # Legacy pending/unconfirmed records still block automatic resends.
+    return delivery.get("status") == "skipped" and delivery.get("slot") != now.strftime("%Y-%m-%dT%H")
 
 
 def publish_once(publisher, generator, now=None):
-    """Claim before network I/O. Unknown outcomes are never resent automatically."""
+    """Evaluate once per opportunity; claim before I/O and never retry unknown sends."""
     now = local_time(now)
+    life = timeline(now)
+    if not life:
+        return False
     day = now.date().isoformat()
     with state_lock():
-        if not due(now):
+        if not due(now, life):
             return False
         deliveries = load_json(DELIVERY, {})
-        deliveries[day] = {"status": "pending", "time": now.isoformat()}
+        deliveries[day] = {"status": "pending", "time": now.isoformat(),
+                           "slot": now.strftime("%Y-%m-%dT%H")}
         save_json(DELIVERY, deliveries)
-    life = timeline(now)
+    life = {**life, "now": now.isoformat(), "recent_messages": recent_messages(now)}
+    success = False
+    status = "skipped"
     try:
         text = generator(life)
-        success = publisher(text)
+        if isinstance(text, str) and text.strip() and not repeated(text):
+            status = "unconfirmed"  # Set before contacting Bilibili, even if it raises.
+            success = bool(publisher(text))
+            if success:
+                status = "published"
     except Exception:
-        success = False
+        pass
     with state_lock():
         deliveries = load_json(DELIVERY, {})
-        deliveries[day]["status"] = "published" if success else "unconfirmed"
+        deliveries[day]["status"] = status
         if success:
             log = load_json("data/dynamic_log.json", [])
             log.append({"time": now.strftime("%Y-%m-%d %H:%M"), "text": text, "has_image": False,
