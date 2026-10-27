@@ -1000,6 +1000,13 @@ def schedule_today():
             schedule = {"date": today}
         delivery = load_json(angelina_life.DELIVERY, {}).get(today, {})
         posted = any(p.get("time", "").startswith(today) for p in load_json("data/dynamic_log.json", []))
+        import angelina_browsing
+        browsing = angelina_browsing.plan(get_raw_config())
+        sessions = load_json(angelina_browsing.SESSIONS, {})
+        schedule.update(proactive_times=browsing["proactive_times"],
+                        proactive_triggered=sessions.get("slots", []) if sessions.get("date") == today else [],
+                        browsing=browsing,
+                        proactive_enabled=get_raw_config().get("ENABLE_PROACTIVE", True))
         schedule.update(dynamic_time=angelina_life.NIGHT_TIME, dynamic_triggered=posted,
                         dynamic_status="published" if posted else delivery.get("status", "waiting"),
                         dynamic_enabled=get_raw_config().get("ENABLE_DYNAMIC", True), timezone="Asia/Shanghai")

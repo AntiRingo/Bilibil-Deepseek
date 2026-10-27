@@ -22,6 +22,7 @@ from mentions import MentionClient, inspect_video
 from moderation import Moderation
 from model_options import short_response_options
 import angelina_life
+import angelina_browsing
 from conversation import CONVERSATION_PROMPT, group_messages, split_reply
 from private_messages import (
     PrivateMessageClient,
@@ -1316,7 +1317,16 @@ def run():
             except:
                 proactive_times, proactive_triggered, dynamic_time, dynamic_triggered = generate_daily_schedule()
 
-            if ENABLE_PROACTIVE:
+            if ENABLE_PROACTIVE and angelina_life.enabled():
+                browsing = angelina_browsing.plan(get_raw_config())
+                slot = angelina_browsing.current_slot(browsing)
+                sessions = load_json(angelina_browsing.SESSIONS, {})
+                key = f"angelina:{browsing['date']}:{slot}"
+                claimed = sessions.get("date") == browsing["date"] and slot in sessions.get("slots", [])
+                if slot and not claimed and key not in proactive_triggered:
+                    subprocess.Popen([PYTHON, os.path.join(BASE_DIR, "Proactive.py")], env={**os.environ, "BILI_JOB_PERSONA": active_persona()})
+                    proactive_triggered.add(key)
+            elif ENABLE_PROACTIVE:
                 for h, m in proactive_times:
                     key = f"{h}:{m:02d}"
                     if key not in proactive_triggered and (now.hour > h or (now.hour == h and now.minute >= m)):

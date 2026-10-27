@@ -9,6 +9,8 @@ import re
 from datetime import datetime, timedelta
 from openai import OpenAI
 from video_preferences import order_videos
+import angelina_browsing
+import angelina_life
 
 # ========== 配置 ==========
 from config import *
@@ -521,12 +523,14 @@ comment要求：
 评分：1-3差，4-5一般，6-7不错，8-9很好，10神作。不要无脑高分。
 直接输出JSON不加其他内容。"""
 
+    if angelina_life.enabled():
+        prompt = prompt.replace("部署在bilibili的AI", "在空闲时浏览视频的罗德岛信使")
     try:
         resp = or_client.chat.completions.create(
             model=OR_CHAT_MODEL,
             max_tokens=350,
             response_format={"type": "json_object"},
-            messages=[{"role": "user", "content": prompt}]
+            messages=([{ "role": "system", "content": angelina_browsing.prompt_context(angelina_browsing.plan(get_raw_config()))}] if angelina_life.enabled() else []) + [{"role": "user", "content": prompt}]
         )
         text = resp.choices[0].message.content.strip()
         text = re.sub(r"```json\s*", "", text)
@@ -534,7 +538,16 @@ comment要求：
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             text = match.group(0)
-        return json.loads(text)
+        result = json.loads(text)
+        if not isinstance(result, dict):
+            return None
+        score = result.get("score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not 1 <= score <= 10:
+            return None
+        for key in ("comment", "mood", "review", "recommend_reason"):
+            if not isinstance(result.get(key, ""), str):
+                return None
+        return result
     except Exception as e:
         print(f"⚠️ 评价失败：{e}")
         return None
@@ -542,7 +555,7 @@ comment要求：
 # ========== 生成和发送评论 ==========
 def generate_proactive_comment(video_info, video_description):
     """让Bot根据视频内容生成评论"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = angelina_life.now_local().strftime("%Y-%m-%d %H:%M")
 
     from config import get_raw_config
     _pcfg = get_raw_config()
@@ -598,14 +611,14 @@ def generate_proactive_comment(video_info, video_description):
         resp = or_client.chat.completions.create(
             model=OR_CHAT_MODEL,
             max_tokens=100,
-            messages=[{"role": "user", "content": prompt}]
+            messages=([{ "role": "system", "content": angelina_browsing.prompt_context(angelina_browsing.plan(get_raw_config()))}] if angelina_life.enabled() else []) + [{"role": "user", "content": prompt}]
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
         print(f"⚠️ 评论生成失败：{e}")
         return "这个视频还不错"
 
-def send_comment(oid, comment_text, oid_type=1):
+def send_comment(oid, comment_text, oid_type=1, mention=None):
     """发送评论"""
     url = "https://api.bilibili.com/x/v2/reply/add"
     data = {
@@ -614,6 +627,9 @@ def send_comment(oid, comment_text, oid_type=1):
         "message": comment_text,
         "csrf": BILI_JCT
     }
+    if mention:
+        name, mid = mention
+        data["at_name_to_mid"] = json.dumps({name: int(mid)}, ensure_ascii=False)
     from comment_memes import prepare_comment_pictures
     pictures = prepare_comment_pictures("", comment_text, headers, BILI_JCT)
     if pictures:
@@ -643,7 +659,7 @@ def get_video_oid(bvid):
 # ========== 记忆存储 ==========
 def save_external_memory(external_memory, bvid, video_info, video_description, comment):
     """保存到外部记忆"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = angelina_life.now_local().strftime("%Y-%m-%d %H:%M")
     if bvid not in external_memory:
         external_memory[bvid] = {
             "title": video_info["title"],
@@ -672,17 +688,27 @@ def run():
 
 def _run_for_persona():
     from config import PROACTIVE_LIKE, PROACTIVE_COIN, PROACTIVE_FAV, PROACTIVE_FOLLOW, PROACTIVE_COMMENT
+    from config import get_raw_config
+    cfg = get_raw_config()
+    profile = angelina_browsing.plan(cfg)
+    if profile and not angelina_browsing.claim_session(profile):
+        print("当前不是安洁莉娜的空闲浏览时段，或本时段已刷过")
+        return
+    daily_limit = profile["daily_limit"] if profile else DAILY_WATCH_COUNT
+    comment_limit = profile["comment_limit"] if profile else max(0, int(cfg.get("PROACTIVE_COMMENT_COUNT", DAILY_COMMENT_COUNT)))
     generate_cookies_file()
 
     # 检查今天是否已经刷过B站了
     watch_log = load_json(WATCH_LOG_FILE, [])
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = angelina_life.now_local().strftime("%Y-%m-%d") if profile else datetime.now().strftime("%Y-%m-%d")
     today_watched = [l for l in watch_log if l.get("time", "").startswith(today_str)]
-    if len(today_watched) >= DAILY_WATCH_COUNT:
+    if len(today_watched) >= daily_limit:
         print(f"📌 今天已经看了 {len(today_watched)} 个视频，不再重复刷B站")
         return
 
-    print(f"🎯 Bot刷B站模式启动 | 今日目标：看 {DAILY_WATCH_COUNT} 个视频，评论 {DAILY_COMMENT_COUNT} 条")
+    session_limit = min(daily_limit - len(today_watched), profile["session_limit"] if profile else daily_limit)
+    print(f"本次浏览额度：{session_limit}；今日上限：{daily_limit}")
+    print(f"🎯 Bot刷B站模式启动 | 今日目标：看 {daily_limit} 个视频，评论 {comment_limit} 条")
 
     external_memory = load_json(EXTERNAL_MEMORY_FILE, {})
     commented_videos = set(load_json(COMMENTED_FILE, []))
@@ -740,8 +766,8 @@ def _run_for_persona():
     print("🔥 获取分区热门视频...")
     # 科技 + 三个随机分区，每个分区限量，避免首个热榜占满候选池。
     other_tids = [tid for tid in PREFERRED_TIDS if tid != 36]
-    selected_tids = [36] + random.sample(other_tids, min(3, len(other_tids)))
-    per_tid_limit = max(3, (DAILY_WATCH_COUNT + 8) // 4)
+    selected_tids = profile["tids"] if profile else [36] + random.sample(other_tids, min(3, len(other_tids)))
+    per_tid_limit = max(3, (daily_limit + 8) // 4)
     for tid in selected_tids:
         hot_videos = get_hot_videos_by_tid(tid)
         added = 0
@@ -764,16 +790,16 @@ def _run_for_persona():
             seen.add(v["bvid"])
             unique_videos.append(v)
 
-    # 小幅偏好 AI / DeepSeek，同时保留其他题材的随机浏览机会。
-    unique_videos = order_videos(unique_videos)
+    # 安洁莉娜跟随行程兴趣；其他人格保留原有轻量兴趣偏好。
+    unique_videos = order_videos(unique_videos, profile=profile)
 
     print(f"📋 共找到 {len(unique_videos)} 个视频")
 
     watch_count = 0
-    comment_count = 0
+    comment_count = sum("💬评论" in entry.get("actions", []) for entry in today_watched)
 
     for video in unique_videos:
-        if watch_count >= DAILY_WATCH_COUNT:
+        if watch_count >= session_limit or (profile and not angelina_browsing.current_slot(profile)):
             break
 
         bvid = video["bvid"]
@@ -783,7 +809,7 @@ def _run_for_persona():
             continue
 
         print(f"\n{'='*50}")
-        print(f"🎬 [{watch_count+1}/{DAILY_WATCH_COUNT}] {video['title']} by {video['up_name']}")
+        print(f"🎬 [{watch_count+1}/{session_limit}] {video['title']} by {video['up_name']}")
 
         # 下载视频
         video_path = download_video(bvid)
@@ -811,7 +837,7 @@ def _run_for_persona():
             print("  ⚠️ 评价失败，跳过互动")
             # 即使评价失败也记录已看，防止重复下载
             watch_log.append({
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "time": angelina_life.now_local().strftime("%Y-%m-%d %H:%M"),
                 "bvid": bvid,
                 "title": video.get("title", ""),
                 "up_name": video.get("up_name", ""),
@@ -858,7 +884,7 @@ def _run_for_persona():
                     print(f"  ⭐ 收藏成功")
 
             # 评论：>=7分 且 还有评论额度
-            if score >= 7 and comment_count < DAILY_COMMENT_COUNT and PROACTIVE_COMMENT:
+            if score >= 7 and comment_count < comment_limit and PROACTIVE_COMMENT:
                 # 用评价里的comment作为评论
                 proactive_comment = generate_proactive_comment(video, video_description)
                 if send_comment(oid, proactive_comment):
@@ -873,7 +899,7 @@ def _run_for_persona():
                     # 保存主动评论日志
                     proactive_log = load_json("data/proactive_log.json", [])
                     proactive_log.append({
-                        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "time": angelina_life.now_local().strftime("%Y-%m-%d %H:%M"),
                         "bvid": bvid,
                         "title": video.get("title", ""),
                         "comment": proactive_comment
@@ -886,7 +912,8 @@ def _run_for_persona():
                 _rcfg = _grc3()
                 _owner_bili = _rcfg.get("OWNER_BILI_NAME", "")
                 _owner_name = _rcfg.get("OWNER_NAME", "") or "主人"
-                if _owner_bili:
+                _owner_mid = str(_rcfg.get("OWNER_MID", ""))
+                if _owner_bili and _owner_mid.isdigit() and int(_owner_mid) > 0 and (not profile or angelina_browsing.claim_share(profile, bvid, evaluation)):
                     # 让AI生成一条自然的推荐语（带人设）
                     try:
                         # 读取人设
@@ -901,7 +928,11 @@ def _run_for_persona():
                             _bot_name = _rcfg.get("BOT_NAME", "霜序")
                             _rec_system = f"你是{_bot_name}，说话自然有个性。"
                         
+                        if profile:
+                            _rec_system = angelina_browsing.prompt_context(profile)
                         _rec_prompt = f"""你刚看完视频「{video.get('title', '')}」，觉得很不错想推荐给{_owner_name}。
+视频内容：{video_description}
+具体亮点：{evaluation.get("recommend_reason", "")}
 写一句简短的推荐语，要求：
 - 用你自己的语气，自然随意
 - 不超过25字
@@ -921,7 +952,10 @@ def _run_for_persona():
                     except:
                         rec_text = evaluation.get("recommend_reason", "你可能会喜欢这个")
                     rec_msg = f"@{_owner_bili} {rec_text}"
-                    if send_comment(oid, rec_msg):
+                    shared = send_comment(oid, rec_msg, mention=(_owner_bili, _owner_mid))
+                    if profile:
+                        angelina_browsing.finish_share(profile, bvid, shared)
+                    if shared:
                         actions.append("📢推荐给主人")
                         print(f"  📢 已@主人：{rec_msg}")
 
@@ -933,7 +967,7 @@ def _run_for_persona():
 
         # ===== 保存观影日记 =====
         log_entry = {
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "time": angelina_life.now_local().strftime("%Y-%m-%d %H:%M"),
             "bvid": bvid,
             "title": video.get("title", ""),
             "up_name": video.get("up_name", ""),
@@ -958,7 +992,7 @@ def _run_for_persona():
                 "score": score,
                 "mood": mood,
                 "review": review,
-                "watched_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "watched_at": angelina_life.now_local().strftime("%Y-%m-%d %H:%M"),
                 "comments": []
             }
             save_json(EXTERNAL_MEMORY_FILE, external_memory)
