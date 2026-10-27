@@ -34,3 +34,26 @@ class VideoPreferenceTests(unittest.TestCase):
         self.assertGreater(counts['AI'], counts['美食'])
         self.assertGreater(counts['美食'] / 12000, 0.23)
         self.assertLess(counts['DeepSeek'] / 12000, 0.43)
+
+    def test_angelina_themes_keep_life_and_persona_isolation(self):
+        profile = {"kind": "送信"}
+        weight = lambda title: interest_weight({"title": title}, profile)
+        self.assertGreater(weight("安洁莉娜同人手书"), weight("明日方舟攻略"))
+        self.assertGreater(weight("安洁莉娜同人音乐"), weight("明日方舟攻略"))
+        self.assertGreater(weight("明日方舟攻略"), weight("普通游戏攻略"))
+        self.assertGreater(weight("AI鲸鱼娘拟人化"), weight("AI技术介绍"))
+        self.assertGreater(weight("AIGC可爱动物拟人"), weight("大模型新闻"))
+        self.assertGreater(weight("AI生成风景"), weight("大模型新闻"))
+        self.assertGreater(weight("美妆穿搭"), weight("无关新闻"))
+        self.assertGreater(weight("书信背包收纳"), weight("美妆穿搭"))
+        self.assertEqual(weight("railway"), .5)
+        self.assertEqual(interest_weight({"title": "安洁莉娜同人手书"}), 1.0)
+        self.assertGreater(interest_weight({"title": "海浪摄影"}, {"kind":"休假"}), weight("海浪摄影"))
+
+    def test_mixed_pool_retains_daily_life_share(self):
+        videos = [{"title": title} for title in ["安洁莉娜同人手书", "明日方舟二创", "AI鲸鱼娘拟人化", "美妆穿搭", "书信收纳", "温暖日常", "手写信件", "背包整理"]]
+        rng = random.Random(9)
+        lifestyle = {v["title"] for v in videos[4:]}
+        count = sum(order_videos(videos, rng, {"kind":"送信"})[0]["title"] in lifestyle for _ in range(2000))
+        self.assertGreater(count, 600)
+        self.assertLess(count, 1100)

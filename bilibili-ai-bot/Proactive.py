@@ -6,6 +6,7 @@ import subprocess
 import os
 import base64
 import re
+import html
 from datetime import datetime, timedelta
 from openai import OpenAI
 from video_preferences import order_videos
@@ -256,6 +257,46 @@ def get_hot_videos_by_tid(tid):
     unique.sort(key=lambda x: x.get("view", 0), reverse=True)
     print(f"  📊 分区{tid}获取到 {len(unique)} 个热门视频（>{MIN_VIEWS}播放）")
     return unique
+
+_search_headers = None
+
+
+def get_search_videos(keyword, limit=3):
+    """Small read-only discovery pool; errors leave the existing feed available."""
+    global _search_headers
+    try:
+        if _search_headers is None:
+            fingerprint = requests.get("https://api.bilibili.com/x/frontend/finger/spi",
+                                       headers=headers, timeout=10).json()
+            buvid = fingerprint.get("data", {}).get("b_3", "")
+            if fingerprint.get("code") != 0 or not buvid:
+                return []
+            _search_headers = {**headers, "Cookie": headers["Cookie"] + f"; buvid3={buvid}"}
+        response = requests.get("https://api.bilibili.com/x/web-interface/wbi/search/type",
+                                headers=_search_headers, timeout=15,
+                                params=sign_wbi_params({"search_type": "video", "keyword": keyword,
+                                                        "page": 1, "order": "totalrank"}))
+        response.raise_for_status()
+        result = response.json()
+        if result.get("code") != 0:
+            print(f"  搜索暂不可用：{keyword} (code={result.get('code')})")
+            return []
+        videos = []
+        for item in result.get("data", {}).get("result", []):
+            if not re.fullmatch(r"BV[0-9A-Za-z]+", str(item.get("bvid", ""))):
+                continue
+            clean = lambda text: html.unescape(re.sub(r"<[^>]*>", "", str(text or "")))
+            videos.append({"bvid": item["bvid"], "title": clean(item.get("title")),
+                           "desc": clean(item.get("description")), "up_name": item.get("author", ""),
+                           "up_mid": item.get("mid", 0), "pubdate": safe_pubdate(item.get("pubdate")),
+                           "pic": item.get("pic", "")})
+            if len(videos) >= limit:
+                break
+        return videos
+    except Exception as exc:
+        print(f"  主题搜索未完成：{keyword} ({type(exc).__name__})")
+        return []
+
 
 def get_video_info(bvid):
     """获取视频详细信息"""
@@ -781,6 +822,16 @@ def _run_for_persona():
                 added += 1
                 if added >= per_tid_limit:
                     break
+
+    # Supplement lifestyle feeds with bounded themed searches; never replace them.
+    if profile:
+        for keyword in angelina_browsing.discovery_queries(profile):
+            if not angelina_browsing.current_slot(profile):
+                break
+            for video in get_search_videos(keyword):
+                pubdate = safe_pubdate(video.get("pubdate"))
+                if video["bvid"] not in watched_bvids and (not pubdate or pubdate >= min_pubdate):
+                    target_videos.append(video)
 
     # 去重
     seen = set()

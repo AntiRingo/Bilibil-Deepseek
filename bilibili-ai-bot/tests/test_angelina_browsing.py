@@ -117,7 +117,7 @@ class BrowsingTests(unittest.TestCase):
         save_json("data/watch_log.json", [{"time": "2026-10-27 12:00", "bvid": str(i)} for i in range(9)])
         video = {"bvid": "BVtest", "title": "手帐日常", "up_name": "up", "up_mid": 8, "pubdate": 1793000000}
         with patch.multiple(worker, generate_cookies_file=Mock(), get_followings=Mock(return_value=[]),
-                            get_hot_videos_by_tid=Mock(return_value=[video]), download_video=Mock(return_value="dummy"),
+                            get_hot_videos_by_tid=Mock(return_value=[video]), get_search_videos=Mock(return_value=[]), download_video=Mock(return_value="dummy"),
                             compress_video=Mock(return_value="dummy"), analyze_video=Mock(return_value="手写信"),
                             delete_video=Mock(), get_video_oid=Mock(return_value=9),
                             send_comment=Mock(return_value=True),
@@ -132,6 +132,28 @@ class BrowsingTests(unittest.TestCase):
             post.return_value.json.return_value = {"code": 0}
             self.assertTrue(worker.send_comment(9, "@博士账号 来看看", mention=("博士账号", "42")))
             self.assertIn('42', post.call_args.kwargs["data"]["at_name_to_mid"])
+
+    def test_discovery_queries_and_search_normalization(self):
+        p = self.profile_at_slot()
+        queries = browsing.discovery_queries(p)
+        self.assertEqual(queries, browsing.discovery_queries(p))
+        self.assertEqual(len(queries), 4)
+        self.assertTrue(any("安洁莉娜" in q for q in queries))
+        self.assertTrue(any("AI" in q for q in queries))
+        worker = self.load_worker()
+        worker._search_headers = worker.headers
+        response = Mock()
+        response.json.return_value = {"code": 0, "data": {"result": [
+            {"bvid": "BV123", "title": '<em class="keyword">安洁莉娜</em>手书 &amp; 音乐',
+             "description": "<b>同人</b>", "mid": 42, "pubdate": 1793000000},
+            {"bvid": "invalid"}]}}
+        with patch.object(worker.requests, "get", return_value=response), patch.object(worker, "sign_wbi_params", side_effect=lambda p:p):
+            videos = worker.get_search_videos(queries[0])
+            self.assertEqual(len(videos), 1)
+            self.assertEqual(videos[0]["title"], "安洁莉娜手书 & 音乐")
+            self.assertEqual(videos[0]["desc"], "同人")
+            response.json.return_value = {"code": -412}
+            self.assertEqual(worker.get_search_videos(queries[0]), [])
 
     def test_evaluation_uses_persona_even_with_custom_prompt_and_rejects_bad_json(self):
         worker = self.load_worker()
