@@ -14,6 +14,7 @@ from persona_storage import load_json, save_json, active_persona, bind_persona, 
 from flask import g, abort
 from persona_storage import valid_name
 import angelina_life
+from conversation import CONVERSATION_PROMPT
 
 # ========== 访问密码 ==========
 AUTH_PASSWORD = os.environ.get("CHAT_PASSWORD", "") or "admin()"
@@ -664,7 +665,8 @@ def _generate_reply(user_msg, image_filename, context_history):
 
 {persona.get('owner_prompt', '')}
 
-这是本地私聊，可以说长一点的话，1-3句话就够了。
+这是本地私聊，可以根据内容自然展开，不必固定句数。
+{CONVERSATION_PROMPT}
 如果收到图片，自然地描述和回应图片内容，像朋友看到对方发的照片一样。
 
 当前时间：{now}{memory_section}{search_section}"""

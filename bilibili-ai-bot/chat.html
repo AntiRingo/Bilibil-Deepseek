@@ -2343,13 +2343,17 @@ function addMessage(role, text, imageUrl, serverTime) {
   const regenBtn = (role === 'assistant')
     ? `<button class="regen-btn" onclick="regenerate(this)">🔄 换一个</button>` : '';
   const imageHtml = imageUrl ? `<img class="msg-image" src="${imageUrl}" onclick="viewImage('${imageUrl}')" alt="图片">` : '';
-  const textHtml = text ? escapeHtml(text) : '';
+  const paragraphs = role === 'assistant'
+    ? String(text || '').split(/\n\s*\n/).map(part => part.trim()).filter(Boolean)
+    : (text ? [text] : []);
+  if (paragraphs.length > 3) paragraphs.splice(2, paragraphs.length - 2, paragraphs.slice(2).join('\n\n'));
+  const textHtml = paragraphs.map(part => `<div class="msg-bubble" style="margin-bottom:8px">${escapeHtml(part)}</div>`).join('');
   container.innerHTML += `
     <div class="message ${role}" data-msg-index="${msgIndex}">
       <div class="msg-avatar">${avatarHtml}</div>
       <div>
         ${imageHtml}
-        ${textHtml ? `<div class="msg-bubble">${textHtml}</div>` : ''}
+        ${textHtml}
         <div class="msg-time">${timeStr}${editBtn}${regenBtn}</div>
       </div>
     </div>`;
