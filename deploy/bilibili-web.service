@@ -1,0 +1,24 @@
+[Unit]
+Description=Bilibili bot management panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bilibili-bot
+Group=bilibili-bot
+WorkingDirectory=/var/lib/bilibili-bot
+EnvironmentFile=/etc/bilibili-bot/environment
+Environment=PATH=/opt/bilibili-bot/current/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/bilibili-bot/current/.venv/bin/gunicorn --chdir /opt/bilibili-bot/current/bilibili-ai-bot --bind 127.0.0.1:5000 --workers 1 --threads 1 --timeout 180 --access-logfile - --error-logfile - wsgi:app
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bilibili-bot
+
+[Install]
+WantedBy=multi-user.target

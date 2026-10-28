@@ -1,0 +1,25 @@
+[Unit]
+Description=Bilibili message listener and scheduled actions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bilibili-bot
+Group=bilibili-bot
+WorkingDirectory=/var/lib/bilibili-bot
+EnvironmentFile=/etc/bilibili-bot/environment
+Environment=PATH=/opt/bilibili-bot/current/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/bilibili-bot/current/.venv/bin/python -u /opt/bilibili-bot/current/bilibili-ai-bot/ai.py
+Restart=on-failure
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bilibili-bot
+
+[Install]
+WantedBy=multi-user.target

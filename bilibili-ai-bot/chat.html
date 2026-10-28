@@ -989,6 +989,13 @@ body::before {
   #loginOverlay input[type="password"] { width: 150px !important; }
 }
 
+/* Persona workspace switch */
+.persona-switch-label { display:block; margin:16px 0 6px; color:var(--text-dim); font-size:12px; }
+.persona-switch { width:100%; padding:9px 10px; border:1px solid rgba(126,200,227,.3); border-radius:10px; background:var(--bg-dark); color:var(--text-main); font:inherit; cursor:pointer; }
+.persona-switch:focus-visible { outline:2px solid var(--ice-blue); outline-offset:2px; }
+.persona-switch:disabled { opacity:.5; cursor:wait; }
+.mobile-persona-switch { display:none; max-width:135px; width:auto; font-size:12px; }
+@media (max-width:768px) { .mobile-persona-switch { display:block; } }
 </style>
 
 
@@ -1028,7 +1035,9 @@ body::before {
   <div class="sidebar">
     <div class="sidebar-header">
       <h1 id="sidebarTitle">🤖 Bot</h1>
-      <p>本地聊天 · 共享记忆</p>
+      <p>每个人格，都有自己的故事</p>
+      <label class="persona-switch-label" for="personaQuickSwitch">当前人格</label>
+      <select class="persona-switch" id="personaQuickSwitch" aria-label="切换人格" onchange="switchPersona(this.value)" disabled><option>加载人格…</option></select>
     </div>
     <div class="sidebar-nav">
       <div class="nav-item active" onclick="switchPanel('chat')">
@@ -1052,6 +1061,9 @@ body::before {
       <div class="nav-item" onclick="switchPanel('activity')">
         <span class="icon">📺</span> 活动日志
       </div>
+      <div class="nav-item" onclick="switchPanel('memes')">
+        <span class="icon">🖼️</span> 评论表情包
+      </div>
       <div class="nav-item" onclick="switchPanel('settings')">
         <span class="icon">⚙</span> 系统设置
       </div>
@@ -1061,7 +1073,7 @@ body::before {
         <span class="status-dot checking" id="sidebarStatusDot"></span>
         <span id="sidebarStatusText">检测后端...</span>
       </div>
-      <div>记忆与B站共享 · 聊天自动存档</div>
+      <div>同一人格与B站同步 · 人格间数据独立</div>
     </div>
   </div>
 
@@ -1071,6 +1083,7 @@ body::before {
       <div class="chat-panel">
         <div class="chat-header">
           <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+          <select class="persona-switch mobile-persona-switch" id="personaMobileSwitch" aria-label="切换人格" onchange="switchPersona(this.value)" disabled><option>加载中…</option></select>
           <div class="avatar" id="chatAvatar">🤖</div>
           <div class="chat-header-info">
             <h2 id="chatBotName">Bot</h2>
@@ -1355,14 +1368,50 @@ body::before {
     <p>Bot发布的B站动态</p>
   </div>
   <div class="panel-content">
+    <div id="angelinaLife" style="margin-bottom:18px;"></div>
     <div id="dynamicLogList"></div>
   </div>
 </div>
 
 <!-- 系统设置面板 -->
+<div id="panel-memes" class="panel">
+  <div class="panel-header">
+    <h2>🖼️ 评论表情包</h2>
+    <p>自动理解图片 · 自定义用途 · 评论智能配图</p>
+  </div>
+  <div class="panel-content">
+    <div class="settings-card">
+      <div class="settings-card-header"><span class="settings-card-title">智能配图</span></div>
+      <div class="settings-card-body">
+        <label><input id="memeEnabled" type="checkbox" onchange="setMemeEnabled(this)"> 评论时自动选择合适的表情包</label>
+        <p>根据对方评论和鲸鱼娘的回复语气选择一张图片。没有合适图片时只发文字。</p>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-header"><span class="settings-card-title">上传表情包</span></div>
+      <div class="settings-card-body">
+        <p>上传后使用系统设置中的视觉模型自动理解画面、文字、情绪和适用场景，无需逐张填写用途。图片会发送给已配置的视觉模型进行识别。</p>
+        <p>支持静态 PNG/JPEG/WebP/GIF，每张最多 5 MB，共 200 张。识别失败仍保留图片，可重试或手动填写用途。</p>
+        <div class="settings-field"><label>图片</label><input id="memeFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></div>
+        <div class="settings-field"><label>名称（可选，默认使用文件名）</label><input id="memeName" maxlength="80" placeholder="例如：鲸鱼抱抱"></div>
+        <div class="settings-field"><label>自定义用途（可选，优先于自动识别）</label><textarea id="memeDescription" maxlength="500" placeholder="留空使用自动识别；也可填写：只用于安慰，不用于开玩笑"></textarea></div>
+        <button class="settings-btn primary" id="memeUploadButton" onclick="uploadCommentMeme()">上传并自动识别</button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-header"><span class="settings-card-title">我的表情包</span><button class="settings-btn small" onclick="loadCommentMemes()">刷新列表</button></div>
+      <div class="settings-card-body">
+        <p id="memeStatus" role="status"></p>
+        <div id="memeList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr));gap:20px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="panel-settings" class="panel">
   <div class="panel-header">
     <h2>⚙ 系统设置</h2>
+    <p>外观、称呼和自定义提示词属于当前人格；API、模型、B站账号及功能开关由所有人格共用。</p>
     <p>Cookie管理 · API配置 · 模型切换</p>
   </div>
   <div class="panel-content">
@@ -1370,7 +1419,7 @@ body::before {
     <!-- Bot 外观设置 -->
     <div class="settings-card">
       <div class="settings-card-header">
-        <span class="settings-card-title">🎨 Bot 外观设置</span>
+        <span class="settings-card-title">🎨 当前人格 · 外观设置</span>
       </div>
       <div class="settings-card-body">
         <div class="settings-field">
@@ -1792,7 +1841,7 @@ body::before {
     <!-- 自定义提示词 -->
     <div class="settings-card">
       <div class="settings-card-header">
-        <span class="settings-card-title">📝 自定义提示词</span>
+        <span class="settings-card-title">📝 当前人格 · 自定义提示词</span>
       </div>
       <div class="settings-card-body">
         <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">留空=使用默认提示词，填写则覆盖对应场景</p>
@@ -1858,7 +1907,7 @@ body::before {
       </div>
       <div class="settings-card-body">
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="settings-btn" onclick="exportData()">📦 导出全部数据</button>
+          <button class="settings-btn" onclick="exportData()">📦 导出当前人格数据</button>
         </div>
       </div>
     </div>
@@ -1933,6 +1982,24 @@ body::before {
 </div>
 
 <script>
+// Pin this page's requests to its rendered persona, including uploads and settings.
+const PAGE_PERSONA = {{ page_persona | tojson }};
+const originalFetch = window.fetch.bind(window);
+window.fetch = async (input, options = {}) => {
+  const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+  if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+    const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
+    headers.set('X-Persona', PAGE_PERSONA);
+    options = {...options, headers};
+  }
+  const response = await originalFetch(input, options);
+  if (response.status === 409 && (await response.clone().json().catch(() => ({}))).persona_changed) {
+    location.reload();
+    throw new Error('人格已切换，正在刷新');
+  }
+  return response;
+};
+
 // ===== Toast 通知 =====
 function toast(msg, type = 'info', duration = 2500) {
   const container = document.getElementById('toastContainer');
@@ -1953,7 +2020,9 @@ async function checkAuth() {
     const data = await resp.json();
     if (data.authed) {
       document.getElementById('loginOverlay').style.display = 'none';
-      loadChatHistory();
+      await loadBranding();
+      await loadPersonas();
+      await loadChatHistory();
     } else {
       document.getElementById('loginOverlay').style.display = 'flex';
       document.getElementById('loginPassword').focus();
@@ -1976,7 +2045,9 @@ async function doLogin() {
     const data = await resp.json();
     if (data.ok) {
       document.getElementById('loginOverlay').style.display = 'none';
-      loadChatHistory();
+      await loadBranding();
+      await loadPersonas();
+      await loadChatHistory();
     } else {
       errEl.textContent = data.error || '密码错误';
       errEl.style.display = 'block';
@@ -2191,7 +2262,7 @@ function switchPanel(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
-  if (event && event.currentTarget) event.currentTarget.classList.add('active');
+  if (typeof event !== 'undefined' && event && event.currentTarget) event.currentTarget.classList.add('active');
   if (name === 'users') loadUsers();
   if (name === 'blocks') loadBlocks();
   if (name === 'memory') loadMemory(1);
@@ -2202,6 +2273,7 @@ function switchPanel(name) {
   if (name === 'watchlog') loadWatchlog(1);
   if (name === 'personality') loadPersonality();
   if (name === 'settings') loadSettings();
+  if (name === 'memes') loadMemePanel();
   if (name === 'persona') loadPersonas();
   if (name === 'activity') loadTodaySchedule();
   if (name === 'dynamiclog') loadDynamicLog();
@@ -2271,13 +2343,17 @@ function addMessage(role, text, imageUrl, serverTime) {
   const regenBtn = (role === 'assistant')
     ? `<button class="regen-btn" onclick="regenerate(this)">🔄 换一个</button>` : '';
   const imageHtml = imageUrl ? `<img class="msg-image" src="${imageUrl}" onclick="viewImage('${imageUrl}')" alt="图片">` : '';
-  const textHtml = text ? escapeHtml(text) : '';
+  const paragraphs = role === 'assistant'
+    ? String(text || '').split(/\n\s*\n/).map(part => part.trim()).filter(Boolean)
+    : (text ? [text] : []);
+  if (paragraphs.length > 3) paragraphs.splice(2, paragraphs.length - 2, paragraphs.slice(2).join('\n\n'));
+  const textHtml = paragraphs.map(part => `<div class="msg-bubble" style="margin-bottom:8px">${escapeHtml(part)}</div>`).join('');
   container.innerHTML += `
     <div class="message ${role}" data-msg-index="${msgIndex}">
       <div class="msg-avatar">${avatarHtml}</div>
       <div>
         ${imageHtml}
-        ${textHtml ? `<div class="msg-bubble">${textHtml}</div>` : ''}
+        ${textHtml}
         <div class="msg-time">${timeStr}${editBtn}${regenBtn}</div>
       </div>
     </div>`;
@@ -2717,6 +2793,8 @@ async function loadTodaySchedule() {
     const proTimes = data.proactive_times || [];
     const proTriggered = data.proactive_triggered || [];
     const dynTime = data.dynamic_time || '--:--';
+    const statusLabels = {waiting:'等待合适的分享时机', skipped:'本次跳过，等待新内容', pending:'发布中或等待核实', published:'已发布', unconfirmed:'未确认成功，请核对B站动态，避免重复发送'};
+    const dynStatus = data.dynamic_enabled === false ? '自动动态已关闭' : (statusLabels[data.dynamic_status] || '');
     const dynDone = data.dynamic_triggered;
 
     const timeItems = proTimes.map(t => {
@@ -2733,12 +2811,13 @@ async function loadTodaySchedule() {
         <div style="font-size:12px;color:var(--text-dim);margin-bottom:6px;">📝 发动态</div>
         <span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;font-size:13px;${dynDone ? 'background:rgba(46,204,113,0.1);color:#2ecc71;' : 'background:rgba(126,200,227,0.08);color:var(--ice-blue);'}">${dynDone ? '✓' : '⏳'} ${dynTime}</span>
       </div>
-      <div style="font-size:11px;color:var(--text-dim);margin-top:8px;">日期：${data.date}　每天自动随机生成新时间</div>`;
+      <div style="font-size:11px;color:var(--text-dim);margin-top:8px;">日期：${data.date}　${data.timezone ? '北京时间 · 每晚固定时间 · ' + dynStatus : '每天自动随机生成新时间'}</div>`;
   } catch(e) { document.getElementById('todaySchedule').innerHTML = '<p style="color:var(--text-dim)">加载失败，确认 ai.py 是否在运行</p>'; }
 }
 
 // ===== 动态记录 =====
 async function loadDynamicLog() {
+  await loadAngelinaLife();
   try {
     const resp = await fetch('/api/dynamic/list');
     const data = await resp.json();
@@ -2751,9 +2830,31 @@ async function loadDynamicLog() {
           <span style="font-size:11px;color:${l.has_image ? 'var(--ice-blue)' : 'var(--text-dim)'};">${l.has_image ? '🖼 带图' : '📝 纯文字'}</span>
         </div>
         <div style="font-size:13px;color:var(--text-main);line-height:1.6;">${escapeHtml(l.text)}</div>
+        ${l.location ? `<div style="font-size:12px;color:var(--text-dim);">📍 ${escapeHtml(l.location)}</div>` : ''}
         ${l.image_prompt ? `<div style="font-size:11px;color:var(--text-dim);">画图 prompt: ${escapeHtml(l.image_prompt).substring(0,80)}...</div>` : ''}
       </div>`).join('');
   } catch(e) { document.getElementById('dynamicLogList').innerHTML = '<p style="color:var(--text-dim)">加载失败</p>'; }
+}
+
+async function loadAngelinaLife() {
+  const el = document.getElementById('angelinaLife');
+  try {
+    const resp = await apiFetch('/api/life');
+    if (!resp.ok) throw new Error('life');
+    const {life} = await resp.json();
+    if (!life) { el.innerHTML = ''; return; }
+    const schedule = await (await apiFetch('/api/schedule/today')).json();
+    const labels = {waiting:'等待合适的分享时机', skipped:'本次跳过，等待新内容', pending:'发布中或等待核实', published:'今天已发布', unconfirmed:'未确认发布成功，请核对B站后处理'};
+    const status = schedule.dynamic_enabled === false ? '自动动态已关闭' : (labels[schedule.dynamic_status] || '');
+    el.innerHTML = `<div class="user-card" style="display:block;line-height:1.8;">
+      <strong>安洁莉娜的近况</strong>
+      <div>📍 ${escapeHtml(life.current.location)} · ${escapeHtml(life.current.kind)}</div>
+      <div style="color:var(--text-dim);font-size:12px;">${escapeHtml(life.date)} · 结合时间、日程与最近交流择机分享 · ${escapeHtml(status)}</div>
+      <details style="margin-top:8px;"><summary>查看生活行程</summary>
+      ${life.legs.map(leg => `<div style="margin-top:8px;font-size:13px;">${escapeHtml(leg.start)} — ${escapeHtml(leg.end)}<br>${escapeHtml(leg.location)} · ${escapeHtml(leg.kind)}</div>`).join('')}
+      <div style="font-size:12px;color:var(--text-dim);margin-top:10px;">符合泰拉背景的原创日常行程；日期用于生活记录，不对应官方剧情年表。</div>
+      </details></div>`;
+  } catch(e) { el.textContent = '生活行程加载失败，请刷新重试。'; }
 }
 
 // ===== 观影日记 =====
@@ -3164,6 +3265,11 @@ async function loadPersonas() {
     const data = await resp.json();
     const list = document.getElementById('personaList');
     const active = data.active;
+    for (const id of ['personaQuickSwitch', 'personaMobileSwitch']) {
+      const select = document.getElementById(id);
+      select.replaceChildren(...data.personas.map(p => new Option(p.display_name, p.name, false, p.name === active)));
+      select.disabled = false;
+    }
     list.innerHTML = data.personas.map(p => `
       <div class="user-card" style="flex-direction:column;align-items:stretch;gap:8px;${p.name === active ? 'border-color:var(--ice-blue);background:rgba(126,200,227,0.08);' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -3182,11 +3288,23 @@ async function loadPersonas() {
   } catch(e) { console.error(e); }
 }
 
+let personaSwitchPending = false;
 async function switchPersona(name) {
+  if (!name || name === PAGE_PERSONA || personaSwitchPending) return;
+  personaSwitchPending = true;
+  const selects = ['personaQuickSwitch', 'personaMobileSwitch'].map(id => document.getElementById(id));
+  selects.forEach(el => el.disabled = true);
   try {
-    await apiFetch('/api/personas/switch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-    loadPersonas();
-  } catch(e) { toast('切换失败', 'error'); }
+    const resp = await apiFetch('/api/personas/switch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || '切换失败');
+    // Recreate every panel, pending upload and form from the new persona's state.
+    location.reload();
+  } catch(e) {
+    toast(e.message || '切换失败', 'error');
+    personaSwitchPending = false;
+    selects.forEach(el => { el.value = PAGE_PERSONA; el.disabled = false; });
+  }
 }
 
 async function editPersona(name) {
@@ -3221,6 +3339,7 @@ async function savePersonaEdit() {
     if (data.ok) {
       document.getElementById('personaEditArea').style.display = 'none';
       loadPersonas();
+      loadBranding();
     } else toast(data.error || '保存失败', 'error');
   } catch(e) { toast('保存失败', 'error'); }
 }
@@ -3266,7 +3385,8 @@ async function deletePersona(name) {
   if (!confirm('确定删除此人格？')) return;
   try {
     await apiFetch('/api/personas/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-    loadPersonas();
+    if (name === PAGE_PERSONA) location.reload();
+    else loadPersonas();
   } catch(e) { toast('删除失败', 'error'); }
 }
 
@@ -3276,8 +3396,8 @@ async function resetPersona() {
   try {
     const resp = await apiFetch('/api/personas/reset', {method:'POST'});
     const data = await resp.json();
-    toast(data.msg || '已重置', 'success');
-    loadPersonas();
+    if (!resp.ok) throw new Error(data.error || '重置失败');
+    location.reload();
   } catch(e) { toast('重置失败', 'error'); }
 }
 
@@ -3615,6 +3735,105 @@ loadSettings = async function() {
   loadPrompts();
   loadBrandingSettings();
 };
+
+
+async function memeRequest(url, options) {
+  const response = await apiFetch(url, options);
+  let data;
+  try { data = await response.json(); } catch (_) { throw new Error('请求失败，请检查图片大小或登录状态'); }
+  if (!response.ok) throw new Error(data.error || '请求失败');
+  return data;
+}
+async function loadMemePanel() {
+  try {
+    const features = await memeRequest('/api/features');
+    document.getElementById('memeEnabled').checked = !!features.ENABLE_COMMENT_MEMES;
+  } catch(e) { document.getElementById('memeStatus').textContent = e.message; }
+  await loadCommentMemes();
+}
+async function setMemeEnabled(input) {
+  input.disabled = true;
+  try {
+    await memeRequest('/api/features/update', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ENABLE_COMMENT_MEMES:input.checked})});
+  } catch(e) { input.checked = !input.checked; document.getElementById('memeStatus').textContent = e.message; }
+  finally { input.disabled = false; }
+}
+async function loadCommentMemes() {
+  const status = document.getElementById('memeStatus');
+  try {
+    const data = await memeRequest('/api/comment_memes');
+    const list = document.getElementById('memeList');
+    list.replaceChildren();
+    for (const item of data.items) {
+      const card = document.createElement('div'); card.className = 'settings-card'; card.style.padding = '14px';
+      const img = document.createElement('img'); img.src = '/api/comment_memes/' + item.id;
+      img.alt = item.name; img.loading = 'lazy'; img.style.cssText = 'width:100%;height:180px;object-fit:contain';
+      const auto = document.createElement('p'); auto.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere';
+      auto.textContent = '自动识别：' + (item.auto_description || '暂无识别结果');
+      const state = document.createElement('p');
+      state.textContent = item.analysis_status === 'failed'
+        ? '识别失败，请检查视觉模型设置后重试。已有描述仍可使用。'
+        : item.auto_description ? '已识别 · 自定义用途留空时使用自动结果' : '尚未识别 · 可点击下方识别按钮';
+      const nameField = document.createElement('div'); nameField.className = 'settings-field';
+      const nameLabel = document.createElement('label'); nameLabel.textContent = '名称';
+      const name = document.createElement('input'); name.maxLength = 80; name.value = item.name;
+      nameLabel.append(name); nameField.append(nameLabel);
+      const usageField = document.createElement('div'); usageField.className = 'settings-field';
+      const usageLabel = document.createElement('label'); usageLabel.textContent = '自定义用途（优先使用；清空恢复自动结果）';
+      const usage = document.createElement('textarea'); usage.maxLength = 500; usage.rows = 3; usage.value = item.description || '';
+      usageLabel.append(usage); usageField.append(usageLabel);
+      const message = document.createElement('p'); message.setAttribute('role', 'status');
+      const buttons = document.createElement('div'); buttons.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+      const save = document.createElement('button'); save.className = 'settings-btn primary'; save.textContent = '保存修改';
+      const analyze = document.createElement('button'); analyze.className = 'settings-btn'; analyze.textContent = '重新识别';
+      const remove = document.createElement('button'); remove.className = 'settings-btn'; remove.textContent = '删除';
+      const busy = (value) => { save.disabled = analyze.disabled = remove.disabled = value; };
+      save.onclick = async () => {
+        busy(true);
+        try {
+          await memeRequest('/api/comment_memes/' + item.id, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.value,description:usage.value})});
+          message.textContent = '已保存，后续评论选图立即生效';
+        } catch(e) { message.textContent = e.message; } finally { busy(false); }
+      };
+      analyze.onclick = async () => {
+        busy(true); message.textContent = '正在理解图片，请稍候…';
+        try {
+          const result = await memeRequest('/api/comment_memes/' + item.id + '/analyze', {method:'POST'});
+          auto.textContent = '自动识别：' + (result.item.auto_description || '暂无识别结果');
+          state.textContent = result.item.analysis_status === 'ready' ? '已识别 · 自定义用途留空时使用自动结果' : '识别失败，可重试或手动填写用途';
+          message.textContent = result.item.analysis_status === 'ready' ? '识别完成，自定义用途保持不变' : '请检查系统设置中的视觉模型';
+        } catch(e) { message.textContent = e.message; } finally { busy(false); }
+      };
+      remove.onclick = async () => {
+        if (!confirm('删除表情包“' + name.value + '”？')) return;
+        busy(true);
+        try { await memeRequest('/api/comment_memes/' + item.id, {method:'DELETE'}); card.remove(); status.textContent = '已删除表情包'; }
+        catch(e) { message.textContent = e.message; busy(false); }
+      };
+      buttons.append(save, analyze, remove); card.append(img, state, auto, nameField, usageField, buttons, message); list.append(card);
+    }
+    status.textContent = data.items.length ? '已上传 ' + data.items.length + ' 张表情包' : '表情包库为空，上传后即可使用。';
+  } catch(e) { status.textContent = e.message; }
+}
+async function uploadCommentMeme() {
+  const status = document.getElementById('memeStatus');
+  const file = document.getElementById('memeFile').files[0];
+  const name = document.getElementById('memeName').value.trim();
+  const description = document.getElementById('memeDescription').value.trim();
+  if (!file) { status.textContent = '请选择图片'; return; }
+  if (file.size > 5 * 1024 * 1024) { status.textContent = '图片不能超过 5 MB'; return; }
+  const button = document.getElementById('memeUploadButton'); button.disabled = true; button.textContent = '上传并识别中…';
+  status.textContent = '正在上传并理解表情包，请稍候…';
+  try {
+    const form = new FormData(); form.append('image', file); form.append('name', name); form.append('description', description);
+    const result = await memeRequest('/api/comment_memes', {method:'POST', body:form});
+    document.getElementById('memeFile').value = '';
+    document.getElementById('memeName').value = ''; document.getElementById('memeDescription').value = '';
+    await loadCommentMemes();
+    status.textContent = result.item.analysis_status === 'ready' ? '上传成功，已自动理解图片内容和用途' : '图片已保存，但自动识别失败。可检查视觉模型后重新识别，或直接填写自定义用途。';
+  } catch(e) { status.textContent = e.message; }
+  finally { button.disabled = false; button.textContent = '上传并自动识别'; }
+}
 
 // ===== 后端健康检测 =====
 let backendOnline = null;

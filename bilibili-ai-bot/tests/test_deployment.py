@@ -1,0 +1,124 @@
+"""Offline deployment checks: always use temporary state, never real credentials."""
+import json
+import ast
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+APP = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(APP))
+
+
+class DeploymentTests(unittest.TestCase):
+    def test_message_clients_keep_deduplication_state_outside_release(self):
+        # Execute the actual startup assignments without starting the live bot loop.
+        from private_messages import PrivateMessageClient
+        from mentions import MentionClient
+        tree = ast.parse((APP / "ai.py").read_text(encoding="utf-8"))
+        assignments = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id in ("private_client", "mention_client")
+                               for t in n.targets)]
+        self.assertEqual(len(assignments), 2)
+        with tempfile.TemporaryDirectory() as tmp:
+            namespace = dict(STATE_DIR=tmp, BASE_DIR="/read-only-release",
+                             PrivateMessageClient=PrivateMessageClient, MentionClient=MentionClient)
+            exec(compile(ast.Module(body=assignments, type_ignores=[]), str(APP / "ai.py"), "exec"), namespace)
+            private = namespace["private_client"]
+            mention = namespace["mention_client"]
+            self.assertEqual(Path(private.state_file).parent, Path(tmp) / "data")
+            self.assertEqual(mention.path.parent, Path(tmp) / "data")
+            mention.state["seen"] = ["preserved-id"]
+            mention.save()
+            self.assertEqual(MentionClient(tmp).state["seen"], ["preserved-id"])
+
+    def run_isolated(self, code, state, production=False, secret="test-secret-" * 4):
+        env = os.environ.copy()
+        env.update(PYTHONPATH=str(APP), BILI_STATE_DIR=str(state),
+                   BILI_PRODUCTION="1" if production else "0", SECRET_KEY=secret,
+                   CHAT_PASSWORD="test-password-long-enough", PYTHONIOENCODING="utf-8")
+        result = subprocess.run([sys.executable, "-c", code], env=env,
+                                cwd=state, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_empty_config_boots_and_private_paths_are_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_isolated('''
+from pathlib import Path
+from unittest.mock import patch
+with patch("requests.sessions.Session.request", side_effect=AssertionError("Network forbidden")):
+    from wsgi import app
+    import config
+    assert Path(config.CONFIG_FILE).parent == Path.cwd()
+    from persona_storage import data_path
+    assert data_path("data/images").is_dir()
+    data_path("data/images/private.png").write_bytes(b"private image")
+    client = app.test_client()
+    assert client.get("/").status_code == 200
+    assert client.get("/api/health").json["ok"] is True
+    for path in ["/config.json", "/config.py", "/data/memory.json", "/.git/config", "/cookies.txt"]:
+        assert client.get(path).status_code == 404, path
+    assert client.get("/api/config/raw").status_code == 401
+    assert client.get("/api/comment_memes").status_code == 401
+    assert client.post("/api/comment_memes").status_code == 401
+    assert client.patch("/api/comment_memes/" + "a" * 32, json={}).status_code == 401
+    assert client.post("/api/comment_memes/" + "a" * 32 + "/analyze").status_code == 401
+    assert client.delete("/api/comment_memes/" + "a" * 32).status_code == 401
+    assert client.get("/api/comment_memes/" + "a" * 32).status_code == 401
+    assert client.get("/data/images/private.png").status_code == 401
+    assert client.post("/api/login", json={"password": "wrong"}).status_code == 403
+    assert client.post("/api/login", json={"password": "test-password-long-enough"}).json["ok"]
+    assert client.get("/api/features").json["ENABLE_COMMENT_MEMES"] is False
+    assert client.post("/api/features/update", json={"ENABLE_COMMENT_MEMES": True}).json["ok"]
+    assert client.get("/api/features").json["ENABLE_COMMENT_MEMES"] is True
+    assert client.get("/data/images/private.png").data == b"private image"
+    assert client.get("/data/images/../config.json").status_code == 404
+    assert client.post("/api/config/update", json={"BOT_NAME": "test"}).json["ok"]
+    assert client.post("/api/config/update", json={"CHAT_PASSWORD": "bad"}).status_code == 400
+    assert client.post("/api/change_password", json={"old": "test-password-long-enough", "new": "short"}).status_code == 400
+''', tmp, production=True)
+
+    def test_state_survives_fresh_process_and_new_defaults_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            original = {"BOT_NAME": "server-name", "SESSDATA": "fake-cookie", "CUSTOM_SETTING": 42}
+            (state / "config.json").write_text(json.dumps(original), encoding="utf-8")
+            (state / "data").mkdir()
+            (state / "data/memory.json").write_text('["keep-me"]', encoding="utf-8")
+            before = (state / "config.json").read_bytes()
+            for _ in range(2):
+                self.run_isolated('''
+import config
+from wsgi import app
+assert config.get_raw_config()["BOT_NAME"] == "server-name"
+assert config.get_raw_config()["CUSTOM_SETTING"] == 42
+assert "ENABLE_PRIVATE_MESSAGES" in config.get_raw_config()
+''', tmp)
+            self.assertEqual((state / "config.json").read_bytes(), before)
+            self.assertEqual((state / "data/memory.json").read_text(), '["keep-me"]')
+
+    def test_production_rejects_weak_secret_and_saved_default_password(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.run_isolated('''
+try:
+    import wsgi
+except RuntimeError as e:
+    assert "SECRET_KEY" in str(e)
+else:
+    raise AssertionError("weak secret accepted")
+''', tmp, production=True, secret="weak")
+            Path(tmp, "config.json").write_text('{"CHAT_PASSWORD":"admin()"}')
+            self.run_isolated('''
+try:
+    import wsgi
+except RuntimeError as e:
+    assert "password" in str(e)
+else:
+    raise AssertionError("default password accepted")
+''', tmp, production=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

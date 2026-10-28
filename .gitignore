@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+backups/
+*.tar.gz
+*.pem
+*.key
+server-info.local.*
+服务器面板登录信息.txt

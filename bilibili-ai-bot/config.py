@@ -10,7 +10,15 @@ import re
 import hashlib
 from datetime import datetime
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# Server releases share one state directory outside the Git checkout.
+# Without this variable, existing local launchers keep their original behavior.
+STATE_DIR = os.environ.get("BILI_STATE_DIR", "")
+if STATE_DIR:
+    STATE_DIR = os.path.abspath(STATE_DIR)
+    os.environ["BILI_STATE_DIR"] = STATE_DIR
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.chdir(STATE_DIR)
+CONFIG_FILE = os.path.join(STATE_DIR or os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 # ========== 默认配置（首次运行自动生成 config.json） ==========
 _DEFAULTS = {
@@ -55,6 +63,7 @@ _DEFAULTS = {
     "EMBED_MODEL": "",
 
     # ===== 功能开关 =====
+    "ENABLE_COMMENT_MEMES": False,
     "ENABLE_WEB_SEARCH": True,
     "ENABLE_PROACTIVE": True,
     "ENABLE_DYNAMIC": True,
@@ -64,6 +73,13 @@ _DEFAULTS = {
     "ENABLE_PRIVATE_MESSAGES": False,
     "PRIVATE_MESSAGE_AUTO_REPLY": True,
     "PRIVATE_MESSAGE_AUTO_BLOCK": True,
+
+    # ===== 主动防护（私信、评论、@ 共用）=====
+    "ENABLE_AUTO_BLOCK": True,
+    "MODERATION_SPAM_WINDOW": 30,
+    "MODERATION_SPAM_THRESHOLD": 6,
+    "MODERATION_REPEAT_THRESHOLD": 3,
+    "MODERATION_WARNING_TTL": 86400,
 
     # ===== 私信参数 =====
     "PRIVATE_MESSAGE_REPLY_SCOPE": "all",  # all / owner / whitelist
@@ -139,8 +155,15 @@ def _load_config():
 
 def _save_config(cfg):
     """保存配置到 config.json"""
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    import tempfile
+    fd, temporary = tempfile.mkstemp(prefix=".config-", dir=os.path.dirname(CONFIG_FILE))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        os.replace(temporary, CONFIG_FILE)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 def _ensure_config_file():
     """确保 config.json 存在，不存在则从旧硬编码配置迁移或创建默认"""
@@ -150,6 +173,10 @@ def _ensure_config_file():
 
 _ensure_config_file()
 _cfg = _load_config()
+import persona_storage as _ps
+_ps.initialize(_cfg)
+from persona_presets import ensure_builtin_personas as _ensure_builtin_personas
+_ensure_builtin_personas()
 
 # ========== 导出变量（兼容 from config import *） ==========
 SESSDATA = _cfg["SESSDATA"]
@@ -301,15 +328,22 @@ def reload_config():
 
 def update_config(updates: dict):
     """更新部分配置并保存"""
-    cfg = _load_config()
-    cfg.update(updates)
-    _save_config(cfg)
+    with _ps.state_lock():
+        cfg = _load_config()
+        personal = {k: v for k, v in updates.items() if _ps.personal_key(k)}
+        if personal:
+            path = _ps.persona_dir() / "settings.json"
+            settings = _ps.read_json(path, {})
+            settings.update(personal)
+            _ps.write_json(path, settings)
+        cfg.update({k: v for k, v in updates.items() if not _ps.personal_key(k)})
+        _save_config(cfg)
     reload_config()
-    return cfg
+    return get_raw_config()
 
 def get_config():
     """获取当前配置（脱敏版，隐藏密钥中间部分）"""
-    cfg = _load_config()
+    cfg = get_raw_config()
     safe = {}
     for k, v in cfg.items():
         if isinstance(v, str) and ("KEY" in k or "TOKEN" in k or "SESSDATA" in k or "JCT" in k) and len(v) > 10:
@@ -320,7 +354,7 @@ def get_config():
 
 def get_raw_config():
     """获取原始配置（不脱敏，仅后端使用）"""
-    return _load_config()
+    return _ps.effective_config(_load_config(), _DEFAULTS)
 
 # ========== 获取各模型的 API 配置 ==========
 def get_model_config(model_type):

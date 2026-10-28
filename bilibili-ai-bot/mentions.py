@@ -29,6 +29,7 @@ def normalize_mention(entry, own_mid):
             "content": str(item["source_content"]),
             "username": user.get("nickname", str(user["mid"])),
             "mid": str(user["mid"]), "is_mention": True,
+            "timestamp": entry.get("at_time", 0),
         }
     except (KeyError, TypeError, ValueError):
         return None

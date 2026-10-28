@@ -10,6 +10,11 @@ from bili_login import BiliQrLoginManager
 
 # ========== 配置 ==========
 from config import *
+from persona_storage import load_json, save_json, active_persona, bind_persona, release_persona, data_path, persona_dir
+from flask import g, abort
+from persona_storage import valid_name
+import angelina_life
+from conversation import CONVERSATION_PROMPT
 
 # ========== 访问密码 ==========
 AUTH_PASSWORD = os.environ.get("CHAT_PASSWORD", "") or "admin()"
@@ -29,10 +34,22 @@ PERSONALITY_FILE = "data/personality_evolution.json"
 PERSONA_FILE = "data/personas.json"
 MOOD_FILE = "data/mood.json"
 BLOCK_LOG_FILE = "data/block_log.json"
-IMAGE_DIR = "data/images"
+def image_dir():
+    directory = data_path("data/images")
+    directory.mkdir(parents=True, exist_ok=True)
+    return str(directory)
 
-or_client = OpenAI(api_key=OR_API_KEY, base_url=OR_BASE_URL)
-embed_client = OpenAI(api_key=SILICON_API_KEY, base_url=_get_raw().get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
+
+def image_url(filename):
+    return f"/data/persona-images/{active_persona()}/{filename}"
+
+
+# The panel must be usable before API credentials have been configured.
+def make_optional_client(api_key, base_url):
+    return OpenAI(api_key=api_key, base_url=base_url or None) if api_key else None
+
+or_client = make_optional_client(OR_API_KEY, OR_BASE_URL)
+embed_client = make_optional_client(SILICON_API_KEY, _get_raw().get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
 
 def get_or_client(model_type="chat"):
     """获取指定模型类型的 OpenAI 客户端，支持独立 URL/Key"""
@@ -86,9 +103,39 @@ def web_search(query):
                 pass
         return ""
 
-app = Flask(__name__, template_folder=".", static_folder=".", static_url_path="")
+app = Flask(__name__, template_folder=os.path.dirname(os.path.abspath(__file__)), static_folder=None)
+from comment_memes import register_meme_routes
+register_meme_routes(app)
 app.secret_key = SECRET_KEY
+from datetime import timedelta
+app.permanent_session_lifetime = timedelta(days=30)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE") == "1")
+os.makedirs("data", exist_ok=True)
+os.makedirs(image_dir(), exist_ok=True)
 bili_qr_login = BiliQrLoginManager()
+
+# Pin every request before any reads; a late reply must stay with its original persona.
+@app.before_request
+def bind_request_persona():
+    g.persona_token = bind_persona()
+    expected = request.headers.get("X-Persona") or request.args.get("persona")
+    if expected and expected != active_persona():
+        return jsonify(error="人格已在其他页面切换，请刷新后重试", persona_changed=True), 409
+
+
+@app.teardown_request
+def release_request_persona(error):
+    token = g.pop("persona_token", None)
+    if token is not None:
+        release_persona(token)
+
+
+@app.after_request
+def prevent_persona_cache(response):
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 # ========== 登录验证 ==========
 @app.before_request
@@ -96,10 +143,8 @@ def check_auth():
     # 放行：首页、静态资源、登录接口
     if request.path == "/" or request.path == "/api/login" or request.path == "/api/auth_check" or request.path == "/api/health" or request.path == "/api/branding":
         return
-    if request.path.startswith("/data/images/"):
-        return
-    # 非html/css/js等静态资源也放行
-    if not request.path.startswith("/api/"):
+    # Unknown paths remain 404; images and all other registered routes require login.
+    if request.endpoint is None:
         return
     # API 需要验证
     if not session.get("authed"):
@@ -129,7 +174,8 @@ def change_password():
     new_pwd = data.get("new", "")
     if old_pwd != AUTH_PASSWORD:
         return jsonify({"error": "原密码错误"}), 403
-    if not new_pwd or len(new_pwd) < 3:
+    minimum = 12 if os.environ.get("BILI_PRODUCTION") == "1" else 3
+    if not new_pwd or len(new_pwd) < minimum:
         return jsonify({"error": "新密码太短"}), 400
     AUTH_PASSWORD = new_pwd
     from config import update_config
@@ -152,16 +198,7 @@ def get_image_media_type(filename):
     return types.get(ext, 'image/png')
 
 # ========== 工具函数 ==========
-def load_json(path, default):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return default
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def log_cost(source, input_tokens, output_tokens, model=""):
     """记录API调用费用，价格从config读取"""
@@ -208,6 +245,8 @@ def log_cost(source, input_tokens, output_tokens, model=""):
     save_json(COST_LOG_FILE, logs)
 
 def get_embedding(text):
+    if embed_client is None:
+        return []
     from config import get_raw_config
     _ecfg = get_raw_config()
     resp = embed_client.embeddings.create(model=_ecfg.get("EMBED_MODEL", "BAAI/bge-m3"), input=text)
@@ -294,7 +333,7 @@ def save_chat_history(history):
 # ========== API路由 ==========
 @app.route("/")
 def index():
-    return render_template("chat.html")
+    return render_template("chat.html", page_persona=active_persona())
 
 @app.route("/api/branding", methods=["GET"])
 def api_branding():
@@ -302,6 +341,7 @@ def api_branding():
     from config import get_raw_config
     cfg = get_raw_config()
     return jsonify({
+        "persona": active_persona(),
         "bot_name": cfg.get("BOT_NAME", "Bot"),
         "bot_avatar": cfg.get("BOT_AVATAR", "🤖"),
         "user_avatar": cfg.get("USER_AVATAR", "🌙"),
@@ -311,7 +351,14 @@ def api_branding():
 
 @app.route("/data/images/<filename>")
 def serve_image(filename):
-    return send_from_directory(IMAGE_DIR, filename)
+    return send_from_directory(image_dir(), filename)
+
+@app.route("/data/persona-images/<persona>/<filename>")
+def serve_persona_image(persona, filename):
+    if persona != active_persona():
+        abort(404)
+    return send_from_directory(image_dir(), filename)
+
 
 @app.route("/api/upload_image", methods=["POST"])
 def upload_image():
@@ -322,11 +369,11 @@ def upload_image():
         return jsonify({"error": "不支持的图片格式"}), 400
     ext = file.filename.rsplit('.', 1)[1].lower()
     filename = f"{uuid.uuid4().hex[:12]}.{ext}"
-    filepath = os.path.join(IMAGE_DIR, filename)
+    filepath = os.path.join(image_dir(), filename)
     file.save(filepath)
     if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
         return jsonify({"error": "图片保存失败"}), 500
-    return jsonify({"filename": filename, "url": f"/data/images/{filename}"})
+    return jsonify({"filename": filename, "url": image_url(filename)})
 
 @app.route("/api/chat/history", methods=["GET"])
 def chat_history():
@@ -341,7 +388,7 @@ def chat_history():
             "time": msg.get("time", ""),
         }
         if msg.get("image"):
-            item["image"] = f"/data/images/{msg['image']}"
+            item["image"] = image_url(msg['image'])
         items.append(item)
     return jsonify({"history": items})
 
@@ -474,11 +521,11 @@ def chat_imagine():
         # 通用图片提取函数
         def save_image_data(img_data):
             filename = f"gen_{uuid.uuid4().hex[:10]}.png"
-            filepath = os.path.join(IMAGE_DIR, filename)
+            filepath = os.path.join(image_dir(), filename)
             with open(filepath, "wb") as f:
                 f.write(img_data)
             log_cost("图片生成", 0, 0, model="image")
-            return f"/data/images/{filename}"
+            return image_url(filename)
 
         def try_decode_data_url(url_str):
             if url_str and url_str.startswith("data:image"):
@@ -576,7 +623,9 @@ def _generate_reply(user_msg, image_filename, context_history):
     # 验证图片
     image_path = None
     if image_filename:
-        image_path = os.path.join(IMAGE_DIR, image_filename)
+        if os.path.basename(image_filename) != image_filename or "/" in image_filename or "\\" in image_filename:
+            return None, "无效的图片文件名"
+        image_path = os.path.join(image_dir(), image_filename)
         if not os.path.exists(image_path) or os.path.getsize(image_path) == 0:
             image_filename = ""
             image_path = None
@@ -609,13 +658,15 @@ def _generate_reply(user_msg, image_filename, context_history):
     bot_name = _bot_cfg.get("BOT_NAME", "Bot")
 
     system_prompt = f"""{persona.get('system_prompt', '')}
+{angelina_life.context()}
 {personality_evolution}
 
 {persona.get('style_prompt', '')}
 
 {persona.get('owner_prompt', '')}
 
-这是本地私聊，可以说长一点的话，1-3句话就够了。
+这是本地私聊，可以根据内容自然展开，不必固定句数。
+{CONVERSATION_PROMPT}
 如果收到图片，自然地描述和回应图片内容，像朋友看到对方发的照片一样。
 
 当前时间：{now}{memory_section}{search_section}"""
@@ -942,7 +993,29 @@ def proactive_list():
 def schedule_today():
     """返回今天的触发计划（ai.py 生成的随机时间）"""
     schedule = load_json("data/schedule_today.json", {})
+    if angelina_life.enabled():
+        from config import get_raw_config
+        today = angelina_life.now_local().date().isoformat()
+        if schedule.get("date") != today:
+            schedule = {"date": today}
+        delivery = load_json(angelina_life.DELIVERY, {}).get(today, {})
+        posted = any(p.get("time", "").startswith(today) for p in load_json("data/dynamic_log.json", []))
+        import angelina_browsing
+        browsing = angelina_browsing.plan(get_raw_config())
+        sessions = load_json(angelina_browsing.SESSIONS, {})
+        schedule.update(proactive_times=browsing["proactive_times"],
+                        proactive_triggered=sessions.get("slots", []) if sessions.get("date") == today else [],
+                        browsing=browsing,
+                        proactive_enabled=get_raw_config().get("ENABLE_PROACTIVE", True))
+        schedule.update(dynamic_time="随情境评估", dynamic_mode="contextual", dynamic_triggered=posted,
+                        dynamic_status="published" if posted else delivery.get("status", "waiting"),
+                        dynamic_enabled=get_raw_config().get("ENABLE_DYNAMIC", True), timezone="Asia/Shanghai")
     return jsonify(schedule)
+
+
+@app.route("/api/life", methods=["GET"])
+def life_timeline():
+    return jsonify({"life": angelina_life.timeline()})
 
 @app.route("/api/dynamic/list", methods=["GET"])
 def dynamic_list():
@@ -997,6 +1070,10 @@ def api_update_config():
 
     # 允许空字符串（清空独立URL/Key = 回退到全局），只过滤None
     updates = {k: v for k, v in data.items() if v is not None}
+    if "ACTIVE_PERSONA" in updates:
+        return jsonify(ok=False, msg="请使用人格切换接口"), 400
+    if "CHAT_PASSWORD" in updates:
+        return jsonify({"ok": False, "msg": "请使用修改密码接口"}), 400
     if not updates:
         return jsonify({"ok": False, "msg": "没有可更新的字段"}), 400
 
@@ -1004,8 +1081,8 @@ def api_update_config():
 
     # 热更新全局 OpenAI 客户端
     try:
-        or_client = OpenAI(api_key=cfg["OR_API_KEY"], base_url=cfg["OR_BASE_URL"])
-        embed_client = OpenAI(api_key=cfg["SILICON_API_KEY"], base_url=cfg.get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
+        or_client = make_optional_client(cfg["OR_API_KEY"], cfg["OR_BASE_URL"])
+        embed_client = make_optional_client(cfg["SILICON_API_KEY"], cfg.get("EMBED_BASE_URL", "https://api.siliconflow.cn/v1"))
     except Exception as e:
         print(f"⚠️ 客户端重建失败：{e}")
 
@@ -1121,11 +1198,11 @@ def api_create_persona():
     import re
     slug = re.sub(r'[^a-zA-Z0-9_]', '', name.lower().replace(' ', '_'))
     if not slug:
-        slug = f"persona_{int(datetime.now().timestamp())}"
+        slug = f"persona_{uuid.uuid4().hex[:12]}"
     
     personas = _load_personas()
-    if any(p["name"] == slug for p in personas):
-        return jsonify({"error": "名称已存在"}), 400
+    if (data_path("data/personas.json").parent / "persona_data" / slug).exists() or any(p["name"] == slug for p in personas):
+        return jsonify({"error": "名称已存在或保留有历史数据，请使用其他名称"}), 400
     
     new_persona = {
         "name": slug,
@@ -1135,6 +1212,7 @@ def api_create_persona():
         "owner_prompt": data.get("owner_prompt", DEFAULT_PERSONA["owner_prompt"]),
         "is_default": False,
     }
+    persona_dir(slug)
     personas.append(new_persona)
     save_json(PERSONA_FILE, personas)
     return jsonify({"ok": True, "persona": new_persona})
@@ -1159,7 +1237,7 @@ def api_switch_persona():
     data = request.json
     name = data.get("name", "default")
     personas = _load_personas()
-    if not any(p["name"] == name for p in personas):
+    if not valid_name(name) or not any(p["name"] == name for p in personas):
         return jsonify({"error": "人格不存在"}), 404
     from config import update_config
     update_config({"ACTIVE_PERSONA": name})
@@ -1201,6 +1279,7 @@ def api_get_features():
     from config import get_raw_config
     cfg = get_raw_config()
     features = {
+        "ENABLE_COMMENT_MEMES": cfg.get("ENABLE_COMMENT_MEMES", False),
         "ENABLE_MENTION_REPLIES": cfg.get("ENABLE_MENTION_REPLIES", True),
         "ENABLE_WEB_SEARCH": cfg.get("ENABLE_WEB_SEARCH", True),
         "ENABLE_PROACTIVE": cfg.get("ENABLE_PROACTIVE", True),
@@ -1226,6 +1305,7 @@ def api_update_features():
     data = request.json
     # 只允许更新已知的开关字段
     allowed = {
+        "ENABLE_COMMENT_MEMES",
         "ENABLE_MENTION_REPLIES",
         "ENABLE_WEB_SEARCH", "ENABLE_PROACTIVE", "ENABLE_DYNAMIC",
         "ENABLE_PERSONALITY_EVOLUTION", "ENABLE_MOOD", "ENABLE_AFFECTION",
@@ -1417,7 +1497,7 @@ def api_block_user():
 # ========== 数据导出 API ==========
 @app.route("/api/export", methods=["GET"])
 def api_export_data():
-    """导出所有数据为JSON"""
+    """导出当前人格的数据为JSON"""
     export = {
         "memory": load_json(MEMORY_FILE, []),
         "affection": load_json(AFFECTION_FILE, {}),
@@ -1425,7 +1505,8 @@ def api_export_data():
         "permanent_memory": load_json("data/permanent_memory.json", []),
         "personality": load_json(PERSONALITY_FILE, {}),
         "user_profiles": load_json(USER_PROFILE_FILE, {}),
-        "personas": load_json(PERSONA_FILE, []),
+        "persona": _get_active_persona(),
+        "settings": load_json("data/settings.json", {}),
         "mood": load_json(MOOD_FILE, {}),
         "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -1531,7 +1612,7 @@ def api_model_test():
 
 if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
-    os.makedirs(IMAGE_DIR, exist_ok=True)
+    os.makedirs(image_dir(), exist_ok=True)
     from datetime import timedelta
     app.permanent_session_lifetime = timedelta(days=30)
 
@@ -1541,5 +1622,4 @@ if __name__ == "__main__":
     print(f"🍪 B站Cookie: {info}")
 
     print("🌙 本地聊天已启动 → http://localhost:5000")
-    print(f"🔑 访问密码：{AUTH_PASSWORD}")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host=os.environ.get("CHAT_HOST", "127.0.0.1"), port=5000, debug=False)
