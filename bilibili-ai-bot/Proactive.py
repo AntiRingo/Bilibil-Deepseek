@@ -737,6 +737,7 @@ def _run_for_persona():
         return
     daily_limit = profile["daily_limit"] if profile else DAILY_WATCH_COUNT
     comment_limit = profile["comment_limit"] if profile else max(0, int(cfg.get("PROACTIVE_COMMENT_COUNT", DAILY_COMMENT_COUNT)))
+    comment_min_score = angelina_browsing.COMMENT_MIN_SCORE if profile else 7
     generate_cookies_file()
 
     # 检查今天是否已经刷过B站了
@@ -934,8 +935,8 @@ def _run_for_persona():
                     actions.append("⭐收藏")
                     print(f"  ⭐ 收藏成功")
 
-            # 评论：>=7分 且 还有评论额度
-            if score >= 7 and comment_count < comment_limit and PROACTIVE_COMMENT:
+            # 安洁莉娜更愿意留下短评；仍遵守评论开关和当天额度。
+            if score >= comment_min_score and comment_count < comment_limit and PROACTIVE_COMMENT:
                 # 用评价里的comment作为评论
                 proactive_comment = generate_proactive_comment(video, video_description)
                 if send_comment(oid, proactive_comment):

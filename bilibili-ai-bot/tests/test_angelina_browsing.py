@@ -83,9 +83,12 @@ class BrowsingTests(unittest.TestCase):
 
     def test_share_budget_and_unknown_delivery(self):
         p = browsing.plan(self.cfg)
-        evaluation = {"score": 9, "recommend_owner": True, "recommend_reason": "手写信的细节很温暖"}
+        evaluation = {"score": 7, "recommend_owner": True, "recommend_reason": "手写信的细节很温暖"}
         self.assertFalse(browsing.claim_share(p, "a", {**evaluation, "score": 6}))
         self.assertFalse(browsing.claim_share(p, "a", {**evaluation, "recommend_reason": ""}))
+        self.assertFalse(browsing.claim_share(p, "a", {**evaluation, "recommend_reason": "   "}))
+        self.assertFalse(browsing.claim_share(p, "a", {**evaluation, "recommend_owner": False}))
+        self.assertFalse(browsing.claim_share(p, "a", {**evaluation, "recommend_owner": "true"}))
         self.assertTrue(browsing.claim_share(p, "a", evaluation))
         browsing.finish_share(p, "a", False)
         self.assertFalse(browsing.claim_share(p, "a", evaluation))
@@ -121,7 +124,7 @@ class BrowsingTests(unittest.TestCase):
                             compress_video=Mock(return_value="dummy"), analyze_video=Mock(return_value="手写信"),
                             delete_video=Mock(), get_video_oid=Mock(return_value=9),
                             send_comment=Mock(return_value=True),
-                            evaluate_video=Mock(return_value={"score": 9, "recommend_owner": True, "recommend_reason": "这封手写信很温暖"})), patch.object(worker.time, "sleep"), patch.object(worker.requests, "post", side_effect=AssertionError("network forbidden")), patch.object(worker.or_client.chat.completions, "create", return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="这封手写信，想和你一起看看"))])):
+                            evaluate_video=Mock(return_value={"score": 7, "recommend_owner": True, "recommend_reason": "这封手写信很温暖"})), patch.object(worker.time, "sleep"), patch.object(worker.requests, "post", side_effect=AssertionError("network forbidden")), patch.object(worker.or_client.chat.completions, "create", return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="这封手写信，想和你一起看看"))])):
             worker._run_for_persona()
             self.assertEqual(len(load_json("data/watch_log.json", [])), 10)
             worker._run_for_persona()
@@ -132,6 +135,54 @@ class BrowsingTests(unittest.TestCase):
             post.return_value.json.return_value = {"code": 0}
             self.assertTrue(worker.send_comment(9, "@博士账号 来看看", mention=("博士账号", "42")))
             self.assertIn('42', post.call_args.kwargs["data"]["at_name_to_mid"])
+
+    def test_worker_comment_threshold_keeps_switches_quotas_and_persona_isolation(self):
+        worker = self.load_worker()
+        video = {"bvid": "BVcomment", "title": "手帐日常", "up_name": "up", "up_mid": 8,
+                 "pubdate": 1793000000}
+        cases = [
+            ("angelina", 6, True, 2, 0, True),
+            ("angelina", 5, True, 2, 0, False),
+            ("angelina", 6, False, 2, 0, False),
+            ("angelina", 6, True, 0, 0, False),
+            ("angelina", 6, True, 2, 5, False),
+            ("default", 6, True, 2, 0, False),
+            ("default", 7, True, 2, 0, True),
+        ]
+        for persona, score, enabled, configured_limit, previous_comments, expected in cases:
+            with self.subTest(persona=persona, score=score, enabled=enabled,
+                              configured_limit=configured_limit, previous_comments=previous_comments):
+                self.cfg["PROACTIVE_COMMENT_COUNT"] = configured_limit
+                profile = self.profile_at_slot()
+                token = bind_persona(persona)
+                try:
+                    save_json(browsing.SESSIONS, {})
+                    save_json("data/commented_videos.json", [])
+                    today = self.now.strftime("%Y-%m-%d") if persona == "angelina" else datetime.now().strftime("%Y-%m-%d")
+                    save_json("data/watch_log.json", [
+                        {"time": today + " 00:00", "bvid": str(i), "actions": ["💬评论"]}
+                        for i in range(previous_comments)])
+                    with patch.object(browsing, "plan", return_value=profile if persona == "angelina" else None), \
+                            patch.object(sys.modules["config"], "PROACTIVE_COMMENT", enabled), \
+                            patch.multiple(worker, generate_cookies_file=Mock(), get_followings=Mock(return_value=[]),
+                                           get_hot_videos_by_tid=Mock(return_value=[video]), get_search_videos=Mock(return_value=[]),
+                                           download_video=Mock(return_value="dummy"), compress_video=Mock(return_value="dummy"),
+                                           analyze_video=Mock(return_value="手写信"), delete_video=Mock(),
+                                           get_video_oid=Mock(return_value=9), send_comment=Mock(return_value=True),
+                                           generate_proactive_comment=Mock(return_value="字里行间好温柔"),
+                                           evaluate_video=Mock(return_value={"score": score, "recommend_owner": False})), \
+                            patch.object(worker.time, "sleep"), \
+                            patch.object(worker.requests.sessions.Session, "request", side_effect=AssertionError("network forbidden")), \
+                            patch.object(worker.or_client.chat.completions, "create", side_effect=AssertionError("network forbidden")):
+                        worker._run_for_persona()
+                        if expected:
+                            worker.send_comment.assert_called_once_with(9, "字里行间好温柔")
+                        else:
+                            worker.send_comment.assert_not_called()
+                            worker.generate_proactive_comment.assert_not_called()
+                        self.assertEqual("💬评论" in load_json("data/watch_log.json", [])[-1]["actions"], expected)
+                finally:
+                    release_persona(token)
 
     def test_discovery_queries_and_search_normalization(self):
         p = self.profile_at_slot()
