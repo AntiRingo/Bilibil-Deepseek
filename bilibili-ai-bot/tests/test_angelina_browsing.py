@@ -16,6 +16,11 @@ from persona_storage import bind_persona, release_persona, load_json, save_json
 from video_preferences import interest_weight
 
 
+def completion(text, reason="stop"):
+    return SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(content=text), finish_reason=reason)])
+
+
 class BrowsingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -124,13 +129,16 @@ class BrowsingTests(unittest.TestCase):
                             compress_video=Mock(return_value="dummy"), analyze_video=Mock(return_value="手写信"),
                             delete_video=Mock(), get_video_oid=Mock(return_value=9),
                             send_comment=Mock(return_value=True),
-                            evaluate_video=Mock(return_value={"score": 7, "recommend_owner": True, "recommend_reason": "这封手写信很温暖"})), patch.object(worker.time, "sleep"), patch.object(worker.requests, "post", side_effect=AssertionError("network forbidden")), patch.object(worker.or_client.chat.completions, "create", return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="这封手写信，想和你一起看看"))])):
+                            evaluate_video=Mock(return_value={"score": 7, "recommend_owner": True, "recommend_reason": "这封手写信很温暖"})), patch.object(worker.time, "sleep"), patch.object(worker.requests, "post", side_effect=AssertionError("network forbidden")), patch.object(worker.or_client.chat.completions, "create", return_value=completion("这封手写信，想和你一起看看")):
             worker._run_for_persona()
             self.assertEqual(len(load_json("data/watch_log.json", [])), 10)
             worker._run_for_persona()
             worker.download_video.assert_called_once()
             worker.send_comment.assert_called_once_with(9, "@博士账号 这封手写信，想和你一起看看", mention=("博士账号", "42"))
             self.assertEqual(load_json(browsing.SHARES, {})["2026-10-27"]["BVtest"], "published")
+            self.assertEqual(load_json("data/watch_log.json", [])[-1]["share_comment"],
+                             "@博士账号 这封手写信，想和你一起看看")
+            self.assertEqual(load_json("data/proactive_log.json", [])[-1]["kind"], "owner_share")
         with patch("comment_memes.prepare_comment_pictures", return_value=None), patch.object(worker.requests, "post") as post:
             post.return_value.json.return_value = {"code": 0}
             self.assertTrue(worker.send_comment(9, "@博士账号 来看看", mention=("博士账号", "42")))
@@ -209,12 +217,88 @@ class BrowsingTests(unittest.TestCase):
     def test_evaluation_uses_persona_even_with_custom_prompt_and_rejects_bad_json(self):
         worker = self.load_worker()
         self.cfg["PROMPT_VIDEO_EVALUATE"] = "评价{title}"
-        completion = Mock(return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"score":"九分"}'))]))
-        with patch.object(worker.or_client.chat.completions, "create", completion):
+        create = Mock(return_value=completion('{"score":"九分"}'))
+        with patch.object(worker.or_client.chat.completions, "create", create):
             self.assertIsNone(worker.evaluate_video({"title": "音乐"}, "钢琴演奏"))
-        messages = completion.call_args.kwargs["messages"]
+        messages = create.call_args.kwargs["messages"]
         self.assertEqual(messages[0]["role"], "system")
         self.assertIn("安洁莉娜", messages[0]["content"])
+
+    def test_recommendation_uses_content_review_mood_and_friend_style(self):
+        worker = self.load_worker()
+        profile = browsing.plan(self.cfg)
+        video = {"bvid": "BVshare", "title": "手写信", "desc": "一封寄给老朋友的信"}
+        evaluation = {"score": 7, "recommend_owner": True, "recommend_reason": "结尾的问候很温暖",
+                      "comment": "字里行间都很认真", "review": "读到结尾有点舍不得", "mood": "感动"}
+        text = "结尾那句问候好温柔，读完心里暖暖的。要是也收到这样的信，会先看落款还是正文呀？"
+        save_json("data/proactive_log.json", [{"kind": "owner_share", "comment": "上一条分享"},
+                  {"kind": "manual_mention_test", "status": "withdrawn_wrong_nickname", "comment": "已撤回内容"}])
+        with patch.object(worker, "OR_CHAT_MODEL", "deepseek-flash"), \
+                patch.object(worker.or_client.chat.completions, "create", return_value=completion(text)) as create:
+            self.assertEqual(worker.generate_owner_recommendation(video, "信纸上写着给朋友的问候", evaluation, profile), text)
+        kwargs = create.call_args.kwargs
+        self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "disabled"}})
+        self.assertGreaterEqual(kwargs["max_tokens"], 300)
+        user = kwargs["messages"][-1]["content"]
+        for value in [video["title"], video["desc"], "信纸上写着给朋友的问候", *evaluation.values(), "上一条分享"]:
+            if isinstance(value, str):
+                self.assertIn(value, user)
+        self.assertNotIn("已撤回内容", user)
+        self.assertIn("朋友", user)
+        self.assertIn("少用", user)
+        self.assertIn("不要每条都联系送信", kwargs["messages"][0]["content"])
+
+    def test_invalid_recommendation_never_sends_or_claims_daily_quota(self):
+        worker = self.load_worker()
+        profile = browsing.plan(self.cfg)
+        evaluation = {"score": 8, "recommend_owner": True, "recommend_reason": "吉他的旋律很轻快"}
+        cases = [(None, "stop"), ("", "stop"), ("  ", "stop"), ("@博士账号", "stop"),
+                 ("来看看", "stop"), ("这一段吉他听起来真是让人", "length"),
+                 ("这段吉他很好听。" * 30, "stop"), ("正文被拦截", "content_filter")]
+        with patch.object(worker, "send_comment") as send:
+            for text, reason in cases:
+                with self.subTest(text=text, reason=reason), \
+                        patch.object(worker.or_client.chat.completions, "create", return_value=completion(text, reason)):
+                    self.assertEqual(worker.share_video_with_owner(9, {"bvid": "BVempty"}, "吉他演奏", evaluation, profile), "")
+                    self.assertEqual(load_json(browsing.SHARES, {}), {})
+                    self.assertEqual(load_json("data/proactive_log.json", []), [])
+            with patch.object(worker.or_client.chat.completions, "create", side_effect=TimeoutError):
+                self.assertEqual(worker.share_video_with_owner(9, {"bvid": "BVtimeout"}, "吉他演奏", evaluation, profile), "")
+            send.assert_not_called()
+
+    def test_failed_share_is_not_retried(self):
+        worker = self.load_worker()
+        profile = browsing.plan(self.cfg)
+        evaluation = {"score": 8, "recommend_owner": True, "recommend_reason": "吉他的旋律很轻快"}
+        with patch.object(worker, "generate_owner_recommendation", return_value="这一段吉他听着好轻快，要一起听听吗？"), \
+                patch.object(worker, "send_comment", return_value=False) as send:
+            for _ in range(2):
+                self.assertEqual(worker.share_video_with_owner(9, {"bvid": "BVfailure"}, "吉他演奏", evaluation, profile), "")
+            send.assert_called_once()
+        self.assertEqual(load_json(browsing.SHARES, {})[profile["date"]]["BVfailure"], "unconfirmed")
+        self.assertEqual(load_json("data/proactive_log.json", []), [])
+
+    def test_empty_and_truncated_comments_are_not_published(self):
+        worker = self.load_worker()
+        self.cfg["PROMPT_PROACTIVE_COMMENT"] = "评论{title}"
+        with patch.object(worker.requests, "post") as post:
+            for value in (None, "", "  ", "@博士账号", "@博士账号  ……"):
+                self.assertFalse(worker.send_comment(9, value, mention=("博士账号", "42")))
+            for text, reason in [(None, "stop"), ("", "stop"), ("鼓点让人心里发", "length")]:
+                with patch.object(worker.or_client.chat.completions, "create", return_value=completion(text, reason)):
+                    comment = worker.generate_proactive_comment({"title": "音乐"}, "鼓点很轻快")
+                    self.assertEqual(comment, "")
+                    self.assertFalse(worker.send_comment(9, comment))
+            post.assert_not_called()
+
+    def test_empty_video_analysis_uses_metadata_fallback(self):
+        worker = self.load_worker()
+        path = Path(self.temp.name) / "video.mp4"
+        path.write_bytes(b"offline-video")
+        with patch.object(worker.or_client.chat.completions, "create", return_value=completion("")), \
+                patch.object(worker, "extract_frames", return_value=[]):
+            self.assertEqual(worker.analyze_video(str(path), "手写信", "给朋友的问候"),
+                             "视频标题：手写信。简介：给朋友的问候")
 
 
 if __name__ == "__main__":
