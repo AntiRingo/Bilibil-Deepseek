@@ -139,6 +139,8 @@ class BrowsingTests(unittest.TestCase):
             self.assertEqual(load_json("data/watch_log.json", [])[-1]["share_comment"],
                              "@博士账号 这封手写信，想和你一起看看")
             self.assertEqual(load_json("data/proactive_log.json", [])[-1]["kind"], "owner_share")
+            self.assertEqual(load_json("data/video_memory.json", {})["BVtest"]["analysis"], "手写信")
+            self.assertEqual(load_json("data/video_memory.json", {})["BVtest"]["source"], "watched_excerpt")
         with patch("comment_memes.prepare_comment_pictures", return_value=None), patch.object(worker.requests, "post") as post:
             post.return_value.json.return_value = {"code": 0}
             self.assertTrue(worker.send_comment(9, "@博士账号 来看看", mention=("博士账号", "42")))

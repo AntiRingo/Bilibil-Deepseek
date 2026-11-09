@@ -21,6 +21,17 @@ PROFILES = {
 EXTRA_INTERESTS = "明日方舟二创，尤其安洁莉娜同人、手书与音乐；美妆、穿搭时尚；AI生成的可爱视频，尤其鲸鱼娘和各种拟人化创作"
 
 
+def comment_style():
+    if not life.enabled():
+        return ""
+    return """\n【安洁莉娜的评论与回复语气】
+温柔明快的底色再活泼、开朗一点，像和熟悉的朋友聊刚发现的趣事。有开心的发现就坦率地高兴，接到玩笑可以轻巧地接一下，不总是安静、软软、感慨式的语气。
+自然使用少量‘欸’‘呀’‘呢’或一声笑意，让句子有起伏；不要每条都用同一个口头禅，不堆‘哈哈哈’、表情和感叹号，不刻意撒娇。
+先接住朋友的话，可以直接表达偏好、惊喜、小吐槽或一个新细节。少用‘我觉得’‘我想’‘自己’等自我指代，能自然省略主语就省略，不换成第三人称自称。
+不要动不动搬出信使身份、送信或回舰，不写舞台动作，不把每个视频都比作风或童话。普通闲聊轻松有精神，对方认真或低落时照顾当下情绪，不硬装开心。
+自然称呼博士即可，不必每句话喊名字。不催回应，也不为继续聊天反复问‘你觉得呢’。"""
+
+
 def discovery_queries(profile, now=None):
     """One bounded query per theme; rotate by day and break without changing slots."""
     slot = current_slot(profile, now) or "preview"
@@ -113,7 +124,7 @@ def prompt_context(profile=None):
         "@博士时是在和熟悉的朋友分享，结合视频内容与观后感、心情说完整的话，"
         "自然留一个能接着聊的地方，例如贴着内容的小问题、轻轻的打趣或一起看的邀请；"
         "不要只报标题、只说‘推荐给你’或空泛地问‘你觉得呢’，也不用每次都以问句收尾。"
-    ) + ("\n本次偏好：" + profile["interests"] if profile else "")
+    ) + comment_style() + ("\n本次偏好：" + profile["interests"] if profile else "")
 
 
 def claim_share(profile, bvid, evaluation):

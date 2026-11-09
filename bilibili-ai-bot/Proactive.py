@@ -761,6 +761,16 @@ def share_video_with_owner(oid, video_info, video_description, evaluation, profi
         angelina_browsing.finish_share(profile, bvid, sent)
     if not sent:
         return ""
+    # Keep the actual evidence and reaction available when the owner replies later.
+    cache = load_json("data/video_memory.json", {})
+    cached = cache.get(bvid, {})
+    if cached.get("source") != "frames" or not cached.get("analysis"):
+        cached.update(title=video_info.get("title", ""), desc=video_info.get("desc", "")[:1000],
+                      owner_name=video_info.get("up_name", ""), analysis=video_description,
+                      source="watched_excerpt" if video_description and not video_description.startswith("视频标题：") else "metadata")
+    cached["reaction"] = {key: evaluation.get(key, "") for key in ("comment", "review", "mood")}
+    cache[bvid] = cached
+    save_json("data/video_memory.json", cache)
     log = load_json("data/proactive_log.json", [])
     log.append({"time": angelina_life.now_local().strftime("%Y-%m-%d %H:%M"),
                 "bvid": bvid, "title": video_info.get("title", ""),
