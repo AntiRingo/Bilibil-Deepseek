@@ -300,6 +300,22 @@ class BrowsingTests(unittest.TestCase):
             self.assertEqual(worker.analyze_video(str(path), "手写信", "给朋友的问候"),
                              "视频标题：手写信。简介：给朋友的问候")
 
+    def test_frame_analysis_preserves_silent_excerpt_limitations(self):
+        worker = self.load_worker()
+        path = Path(self.temp.name) / "video.mp4"
+        frame = Path(self.temp.name) / "frame.jpg"
+        path.write_bytes(b"offline-video")
+        frame.write_bytes(b"offline-frame")
+        with patch.object(worker.or_client.chat.completions, "create",
+                          side_effect=[completion(""), completion("镜头中有一封摊开的手写信。")]) as create, \
+                patch.object(worker, "extract_frames", return_value=[str(frame)]):
+            text = worker.analyze_video(str(path), "手写信", "给朋友的问候")
+        self.assertIn("无音轨", text)
+        self.assertIn("可能遗漏情节", text)
+        self.assertIn("镜头中有一封摊开的手写信。", text)
+        self.assertIn("不描述配乐", create.call_args.kwargs["messages"][0]["content"])
+        self.assertFalse(frame.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
