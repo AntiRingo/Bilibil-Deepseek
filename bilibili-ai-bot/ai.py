@@ -20,6 +20,7 @@ from config import *
 from persona_storage import load_json, save_json, active_persona, bind_persona, release_persona, data_path, persona_dir
 from mentions import MentionClient, inspect_video
 from moderation import Moderation
+from identity_policy import should_ignore_identity, identity_instruction
 from model_options import short_response_options
 import angelina_life
 import angelina_browsing
@@ -975,6 +976,8 @@ def recognize_images(image_urls):
         return ""
 
 def generate_reply_and_score(comment_text, username, level, memory_context, channel="comment"):
+    if should_ignore_identity(comment_text):
+        return 0, "", "", "", []
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     level_prompt = _get_level_prompts()[level]
     memory_section = f"\n\n【记忆参考（仅在与当前话题直接相关时参考，否则忽略）】\n{memory_context}" if memory_context else ""
@@ -1049,6 +1052,7 @@ def generate_reply_and_score(comment_text, username, level, memory_context, chan
 拒绝：表白暧昧、引战、黄赌毒政治。遇到恶意时平静坚定，可暗讽，不恶语。
 {level_prompt}
 {_private_instruction}
+{identity_instruction()}
 
 【今日状态（仅作微调参考，不要让它主导你的回复风格）】{mood} — {mood_prompt}{festival_section}
 
@@ -1071,6 +1075,8 @@ impression简短描述用户性格/说话风格，如"友善健谈，喜欢聊�
     log_cost("私信回复" if channel == "private" else "评论回复", in_tok, out_tok)
     text = text.replace("```json", "").replace("```", "").strip()
     result = json.loads(text)
+    if angelina_life.enabled() and isinstance(result, dict) and result.get("ignore") is True:
+        return 0, "", "", "", []
     if not isinstance(result, dict) or not isinstance(result.get("reply"), str) or not result["reply"].strip():
         raise ValueError("Empty or invalid reply")
     return (
@@ -1507,6 +1513,11 @@ def run():
                     comment_text, reply["username"], level, memory_context,
                     channel="mention" if reply.get("is_mention") else "comment",
                 )
+
+                if not ai_reply.strip():
+                    replied_rpids.add(rpid)
+                    save_replied(replied_rpids)
+                    continue
 
                 max_score = 100 if str(mid) == str(OWNER_MID) else 99
                 new_score = max(0, min(max_score, current_score + score_delta))
