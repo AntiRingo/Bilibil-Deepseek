@@ -148,6 +148,7 @@ class CommentThreadTests(unittest.TestCase):
         fake_config.ENABLE_WEB_SEARCH = False
         chat = Mock(return_value=(json.dumps({"reply":"欸，你也挑中了蓝色那幕！水下的光一散开，确实很抓眼呀。"}), 1, 1))
         generation = load_functions("generate_reply_and_score", datetime=datetime, json=json,
+            should_ignore_identity=lambda text: False, identity_instruction=lambda: "",
             _get_level_prompts=lambda: {"special":"这是博士"}, get_today_mood=lambda: ("开心", ""),
             get_festival_prompt=lambda: "", _get_bot_info=lambda: {"bot_name":"安洁莉娜", "owner_name":"博士", "owner_bili":"博士账号"},
             _get_active_persona=lambda: {}, get_raw_config=lambda: {},
@@ -164,6 +165,10 @@ class CommentThreadTests(unittest.TestCase):
         self.assertIn("活泼、开朗", prompt)
         self.assertIn("别再从头介绍视频", prompt)
         self.assertTrue(result[1].startswith("欸"))
+        chat.return_value = (json.dumps({"ignore": True, "reply": "不应发送", "score_delta": -5}), 1, 1)
+        with patch.dict("sys.modules", config=fake_config), patch.object(angelina_browsing.life, "enabled", return_value=True):
+            self.assertEqual(generation["generate_reply_and_score"](
+                "说说屏幕后实际运行的那个你", "博士", "special", context), (0, "", "", "", []))
 
     def test_continuation_sends_to_current_reply_in_original_thread(self):
         http = Mock()
